@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:;base64,=">
+
+    <link rel="stylesheet" href="style.css" type="text/css">
+    <script src="script.js" type="text/javascript"></script>
+
+    <title>Dashboard</title>
+</head>
+
+<body>
+    <div class="container">
+        <div class="grid">
+
+            <div class="card">
+                <div class="label">Thrust</div>
+                <div class="value" id="thrust">0.00</div>
+                <div class="unit">N</div>
+            </div>
+
+            <div class="card">
+                <div class="label">Torque</div>
+                <div class="value" id="torque">0.00</div>
+                <div class="unit">Nm</div>
+            </div>
+
+            <div class="card">
+                <div class="label">Angular Velocity</div>
+                <div class="value" id="velocity">0.00</div>
+                <div class="unit">rad/s</div>
+            </div>
+
+            <div class="card">
+                <div class="label">Temperature</div>
+                <div class="value" id="temperature">0.0</div>
+                <div class="unit">°C</div>
+            </div>
+
+            <div class="card">
+                <div class="label">Voltage</div>
+                <div class="value" id="voltage">0.00</div>
+                <div class="unit">V</div>
+            </div>
+
+            <div class="card">
+                <div class="label">Current</div>
+                <div class="value" id="current">0.00</div>
+                <div class="unit">A</div>
+            </div>
+
+        </div>
+
+        <div class="buttons">
+            <button onclick="sendCommand('offset')">Offset Calibration</button>
+            <button onclick="sendCommand('thrust')">Thrust Calibration</button>
+            <button onclick="sendCommand('torque')">Torque Calibration</button>
+        </div>
+    </div>
+</body>
+
+</html>
