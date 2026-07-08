@@ -1,0 +1,3 @@
+[submodule "firmware/lwip"]
+	path = firmware/lwip
+	url = https://github.com/lwip-tcpip/lwip.git
