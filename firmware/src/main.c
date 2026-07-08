@@ -1,6 +1,3 @@
-// sudo pppd /dev/ttyACM0 1000000 192.168.7.1:192.168.7.2 local noauth debug nodetach
-// iperf -c 192.168.7.2 -e -i 1 -M 5000 -l 8192
-
 #include <string.h>
 
 #include <stm32u0xx_hal.h>
