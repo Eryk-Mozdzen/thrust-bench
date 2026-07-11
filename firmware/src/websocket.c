@@ -1,3 +1,7 @@
+// TODO: handle fragmented messages
+// TODO: handle payload length 7+16
+// TODO: handle payload length 7+64
+
 #include <stddef.h>
 #include <string.h>
 
@@ -59,9 +63,7 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
         if(wss->on_close != NULL) {
             wss->on_close(wss->arg, client);
         }
-        client->state = WEBSOCKET_STATE_CLOSING;
-        tcp_close(pcb);
-        return ERR_OK;
+        return websocket_close(client);
     }
 
     tcp_recved(pcb, p->tot_len);
@@ -116,8 +118,37 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
             }
         } break;
         case WEBSOCKET_STATE_OPEN: {
+            u8_t payload[125] = {0};
+
+            const opcode_t opcode = (data[0] & 0x0F);
+            const u8_t masked = (data[1] & 0x80);
+            const u8_t payload_len = (data[1] & 0x7F);
+
+            if((opcode != OPCODE_NON_CONTROL_FRAME_BINARY) &&
+               (opcode != OPCODE_NON_CONTROL_FRAME_TEXT)) {
+                break;
+            }
+
+            if((payload_len == 126) || (payload_len == 127)) {
+                break;
+            }
+
+            if(masked) {
+                const u8_t masking_key[4] = {
+                    data[2],
+                    data[3],
+                    data[4],
+                    data[5],
+                };
+                for(u8_t i = 0; i < payload_len; i++) {
+                    payload[i] = data[6 + i] ^ masking_key[i % 4];
+                }
+            } else {
+                memcpy(payload, &data[2], payload_len);
+            }
+
             if(wss->on_message != NULL) {
-                wss->on_message(wss->arg, client, p);
+                wss->on_message(wss->arg, client, payload, payload_len);
             }
         } break;
         case WEBSOCKET_STATE_CLOSING: {
@@ -143,7 +174,11 @@ static err_t websocket_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
     tcp_arg(client->pcb, client);
     tcp_recv(client->pcb, websocket_recv);
 
+    if(wss->clients != NULL) {
+        wss->clients->prev = client;
+    }
     client->next = wss->clients;
+    client->prev = NULL;
     wss->clients = client;
 
     if(wss->on_open != NULL) {
@@ -242,4 +277,28 @@ err_t websocket_send(struct websocket_client *client, const void *message, u32_t
     }
 
     return ERR_OK;
+}
+
+err_t websocket_close(struct websocket_client *client) {
+    if(client->state != WEBSOCKET_STATE_OPEN) {
+        return ERR_CONN;
+    }
+
+    client->state = WEBSOCKET_STATE_CLOSING;
+
+    const err_t err = tcp_close(client->pcb);
+
+    if(client->next != NULL) {
+        client->next->prev = client->prev;
+    }
+
+    if(client->prev != NULL) {
+        client->prev->next = client->next;
+    } else {
+        client->server->clients = client->next;
+    }
+
+    mem_free(client);
+
+    return err;
 }

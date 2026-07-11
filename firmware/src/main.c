@@ -117,6 +117,25 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
     }
 }
 
+static void ws_on_message_cb(void *arg,
+                             struct websocket_client *client,
+                             const void *message,
+                             u32_t message_len) {
+    // context_t *context = arg;
+
+    (void)arg;
+    (void)client;
+    (void)message_len;
+
+    if(strcmp(message, "offset") == 0) {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+    } else if(strcmp(message, "thrust") == 0) {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+    } else if(strcmp(message, "torque") == 0) {
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+    }
+}
+
 sys_prot_t sys_arch_protect() {
     return 0;
 }
@@ -229,8 +248,8 @@ int main() {
     while(1) {
         const uint32_t timestamp = HAL_GetTick();
 
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5,
-                          ((timestamp % 1000) < 50) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5,
+        //                   ((timestamp % 1000) < 50) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
         switch(context.state) {
             case STATE_DISCONNECTED: {
@@ -266,6 +285,8 @@ int main() {
                 httpd_init();
 
                 ws_server = websocket_server_new(81);
+                websocket_arg(ws_server, &context);
+                websocket_on_message(ws_server, ws_on_message_cb);
 
                 context.state = STATE_LOOP;
             } break;
@@ -286,10 +307,9 @@ int main() {
                         16.8f + sinf(0.1f * 0.001f * timestamp) * 10,
                         2.56f + sinf(0.01f * 0.001f * timestamp) * 10,
                     };
-                    struct websocket_client *client = ws_server->clients;
-                    while(client != NULL) {
+                    for(struct websocket_client *client = ws_server->clients; client != NULL;
+                        client = client->next) {
                         websocket_send(client, &frame, sizeof(frame));
-                        client = client->next;
                     }
                 }
             } break;
