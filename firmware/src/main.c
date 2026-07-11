@@ -214,7 +214,7 @@ int main() {
     mqtt_client_t *mqtt_client = NULL;
     context.mqtt_connected = false;
 
-    websocket_t ws;
+    websocket_server_t *ws_server = NULL;
 
     context.state = STATE_DISCONNECTED;
     fifo_init(&context.fifo_tx);
@@ -265,7 +265,7 @@ int main() {
 
                 httpd_init();
 
-                websocket_init(&ws, 81);
+                ws_server = websocket_server_new(81);
 
                 context.state = STATE_LOOP;
             } break;
@@ -286,7 +286,11 @@ int main() {
                         16.8f + sinf(0.1f * 0.001f * timestamp) * 10,
                         2.56f + sinf(0.01f * 0.001f * timestamp) * 10,
                     };
-                    websocket_write(&ws, &frame, sizeof(frame));
+                    struct websocket_client *client = ws_server->clients;
+                    while(client != NULL) {
+                        websocket_send(client, &frame, sizeof(frame));
+                        client = client->next;
+                    }
                 }
             } break;
         }

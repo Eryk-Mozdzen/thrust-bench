@@ -1,6 +1,10 @@
-#include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 
+#include <lwip/arch.h>
+#include <lwip/err.h>
+#include <lwip/mem.h>
+#include <lwip/pbuf.h>
 #include <lwip/tcp.h>
 #include <netif/ppp/polarssl/sha1.h>
 
@@ -15,7 +19,7 @@ typedef enum {
     OPCODE_CONTROL_FRAME_PONG = 10,
 } opcode_t;
 
-static uint32_t base64_encode(char *dest, const uint8_t *input, const uint32_t input_length) {
+static u32_t base64_encode(char *dest, const u8_t *input, const u32_t input_length) {
     const char encoding_table[] = {
         'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
         'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f',
@@ -23,16 +27,16 @@ static uint32_t base64_encode(char *dest, const uint8_t *input, const uint32_t i
         'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '/',
     };
 
-    const uint32_t mod_table[] = {0, 2, 1};
+    const u32_t mod_table[] = {0, 2, 1};
 
-    const uint32_t dest_length = 4 * ((input_length + 2) / 3);
+    const u32_t dest_length = 4 * ((input_length + 2) / 3);
 
-    for(uint32_t i = 0, j = 0; i < input_length;) {
-        const uint32_t octet_a = (i < input_length) ? input[i++] : 0;
-        const uint32_t octet_b = (i < input_length) ? input[i++] : 0;
-        const uint32_t octet_c = (i < input_length) ? input[i++] : 0;
+    for(u32_t i = 0, j = 0; i < input_length;) {
+        const u32_t octet_a = (i < input_length) ? input[i++] : 0;
+        const u32_t octet_b = (i < input_length) ? input[i++] : 0;
+        const u32_t octet_c = (i < input_length) ? input[i++] : 0;
 
-        const uint32_t triple = (octet_a << 0x10) + (octet_b << 0x08) + octet_c;
+        const u32_t triple = (octet_a << 0x10) + (octet_b << 0x08) + octet_c;
 
         dest[j++] = encoding_table[(triple >> (3 * 6)) & 0x3F];
         dest[j++] = encoding_table[(triple >> (2 * 6)) & 0x3F];
@@ -40,7 +44,7 @@ static uint32_t base64_encode(char *dest, const uint8_t *input, const uint32_t i
         dest[j++] = encoding_table[(triple >> (0 * 6)) & 0x3F];
     }
 
-    for(uint32_t i = 0; i < mod_table[input_length % 3]; i++) {
+    for(u32_t i = 0; i < mod_table[input_length % 3]; i++) {
         dest[dest_length - 1 - i] = '=';
     }
 
@@ -48,9 +52,14 @@ static uint32_t base64_encode(char *dest, const uint8_t *input, const uint32_t i
 }
 
 static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
-    websocket_t *ws = arg;
+    struct websocket_client *client = arg;
+    websocket_server_t *wss = client->server;
 
     if(p == NULL) {
+        if(wss->on_close != NULL) {
+            wss->on_close(wss->arg, client);
+        }
+        client->state = WEBSOCKET_STATE_CLOSING;
         tcp_close(pcb);
         return ERR_OK;
     }
@@ -59,7 +68,7 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
 
     const char *data = p->payload;
 
-    switch(ws->state) {
+    switch(client->state) {
         case WEBSOCKET_STATE_CONNECTING: {
             char key[24] = {0};
 
@@ -67,11 +76,11 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
             const char *newline = NULL;
             do {
                 newline = strchr(token, '\n');
-                const size_t token_len = newline - token - 1;
+                const u32_t token_len = newline - token - 1;
 
                 const char *key_header = "Sec-WebSocket-Key";
-                const uint32_t key_header_len = strlen(key_header);
-                const uint32_t key_len = 24;
+                const u32_t key_header_len = strlen(key_header);
+                const u32_t key_len = 24;
 
                 if(token_len >= (key_header_len + key_len)) {
                     if(memcmp(token, key_header, key_header_len) == 0) {
@@ -102,12 +111,14 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
 
                 if(tcp_write(pcb, response, strlen(response), TCP_WRITE_FLAG_COPY) == ERR_OK) {
                     tcp_output(pcb);
-                    ws->state = WEBSOCKET_STATE_OPEN;
+                    client->state = WEBSOCKET_STATE_OPEN;
                 }
             }
         } break;
         case WEBSOCKET_STATE_OPEN: {
-
+            if(wss->on_message != NULL) {
+                wss->on_message(wss->arg, client, p);
+            }
         } break;
         case WEBSOCKET_STATE_CLOSING: {
 
@@ -123,53 +134,112 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
 }
 
 static err_t websocket_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
-    websocket_t *ws = arg;
-    ws->pcb_client = newpcb;
-    tcp_arg(ws->pcb_client, arg);
-    tcp_recv(ws->pcb_client, websocket_recv);
+    websocket_server_t *wss = arg;
+
+    struct websocket_client *client = mem_malloc(sizeof(struct websocket_client));
+    client->server = wss;
+    client->pcb = newpcb;
+    client->state = WEBSOCKET_STATE_CONNECTING;
+    tcp_arg(client->pcb, client);
+    tcp_recv(client->pcb, websocket_recv);
+
+    client->next = wss->clients;
+    wss->clients = client;
+
+    if(wss->on_open != NULL) {
+        wss->on_open(wss->arg, client);
+    }
+
     return ERR_OK;
 }
 
-void websocket_init(websocket_t *ws, const uint32_t port) {
-    ws->pcb_listen = tcp_new();
-    ws->pcb_client = NULL;
-    ws->state = WEBSOCKET_STATE_CONNECTING;
+websocket_server_t *websocket_server_new(u16_t port) {
+    websocket_server_t *wss = mem_malloc(sizeof(websocket_server_t));
 
-    if(ws->pcb_listen == NULL) {
-        return;
+    if(wss == NULL) {
+        return wss;
     }
 
-    if(tcp_bind(ws->pcb_listen, IP_ADDR_ANY, port) != ERR_OK) {
-        tcp_close(ws->pcb_listen);
-        return;
+    wss->pcb = tcp_new();
+    wss->clients = NULL;
+    wss->on_open = NULL;
+    wss->on_close = NULL;
+    wss->on_message = NULL;
+    wss->arg = NULL;
+
+    if(wss->pcb == NULL) {
+        mem_free(wss);
+        return NULL;
     }
 
-    ws->pcb_listen = tcp_listen(ws->pcb_listen);
+    if(tcp_bind(wss->pcb, IP_ADDR_ANY, port) != ERR_OK) {
+        tcp_close(wss->pcb);
+        mem_free(wss);
+        return NULL;
+    }
 
-    tcp_arg(ws->pcb_listen, ws);
-    tcp_accept(ws->pcb_listen, websocket_accept);
+    wss->pcb = tcp_listen(wss->pcb);
+
+    tcp_arg(wss->pcb, wss);
+    tcp_accept(wss->pcb, websocket_accept);
+
+    return wss;
 }
 
-void websocket_write(websocket_t *ws, const void *data, const uint32_t size) {
-    if((ws->pcb_client != NULL) && (ws->state == WEBSOCKET_STATE_OPEN)) {
-        uint8_t frame[256] = {0};
-
-        const uint32_t header_len = 2;
-        const uint32_t data_len = (size <= 125) ? size : 125;
-        const uint32_t frame_len = header_len + data_len;
-
-        frame[0] |= (0x01 << 7);
-        frame[0] |= (OPCODE_NON_CONTROL_FRAME_BINARY << 0);
-        frame[1] |= (data_len << 0);
-
-        memcpy(frame + header_len, data, data_len);
-
-        if(tcp_write(ws->pcb_client, frame, frame_len, TCP_WRITE_FLAG_COPY) == ERR_OK) {
-            tcp_output(ws->pcb_client);
-        }
+void websocket_arg(websocket_server_t *wss, void *arg) {
+    if(wss != NULL) {
+        wss->arg = arg;
     }
 }
 
-websocket_state_t websocket_state(websocket_t *ws) {
-    return ws->state;
+void websocket_on_open(websocket_server_t *wss, websocket_on_open_fn on_open) {
+    if(wss != NULL) {
+        wss->on_open = on_open;
+    }
+}
+
+void websocket_on_close(websocket_server_t *wss, websocket_on_close_fn on_close) {
+    if(wss != NULL) {
+        wss->on_close = on_close;
+    }
+}
+
+void websocket_on_message(websocket_server_t *wss, websocket_on_message_fn on_message) {
+    if(wss != NULL) {
+        wss->on_message = on_message;
+    }
+}
+
+err_t websocket_send(struct websocket_client *client, const void *message, u32_t message_len) {
+    if(client->state != WEBSOCKET_STATE_OPEN) {
+        return ERR_CONN;
+    }
+
+    u8_t frame[256] = {0};
+
+    const u32_t header_len = 2;
+
+    if(message_len > 125) {
+        message_len = 125;
+    }
+
+    frame[0] |= (0x01 << 7);
+    frame[0] |= (OPCODE_NON_CONTROL_FRAME_BINARY << 0);
+    frame[1] |= (message_len << 0);
+
+    memcpy(frame + header_len, message, message_len);
+
+    err_t err;
+
+    err = tcp_write(client->pcb, frame, header_len + message_len, TCP_WRITE_FLAG_COPY);
+    if(err != ERR_OK) {
+        return err;
+    }
+
+    err = tcp_output(client->pcb);
+    if(err != ERR_OK) {
+        return err;
+    }
+
+    return ERR_OK;
 }
