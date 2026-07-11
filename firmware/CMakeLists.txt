@@ -8,6 +8,7 @@ enable_language(ASM C)
 
 add_executable(${CMAKE_PROJECT_NAME}.elf
     "src/main.c"
+    "src/websocket.c"
 
     "cubemx/Core/Src/main.c"
     "cubemx/Core/Src/stm32u0xx_hal_msp.c"
@@ -256,8 +257,14 @@ target_link_options(${CMAKE_PROJECT_NAME}.elf PRIVATE
 	-Wl,-cref
     -Wl,--start-group -lc -lm -Wl,--end-group
 
+    -u _printf_float
+
     -mthumb
 	-mcpu=cortex-m0
+)
+
+target_link_libraries(${CMAKE_PROJECT_NAME}.elf PRIVATE
+    m
 )
 
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME}.elf POST_BUILD

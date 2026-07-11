@@ -1,3 +1,5 @@
+#include <math.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include <stm32u0xx_hal.h>
@@ -11,6 +13,8 @@
 #include <lwip/timeouts.h>
 #include <netif/ppp/ppp.h>
 #include <netif/ppp/pppos.h>
+
+#include "websocket.h"
 
 typedef struct {
     uint8_t buffer[1024];
@@ -210,12 +214,15 @@ int main() {
     mqtt_client_t *mqtt_client = NULL;
     context.mqtt_connected = false;
 
+    websocket_t ws;
+
     context.state = STATE_DISCONNECTED;
     fifo_init(&context.fifo_tx);
     fifo_init(&context.fifo_rx);
     HAL_UART_Receive_IT(&huart2, (uint8_t *)&recv_byte, 1);
 
     uint32_t prev1 = 0;
+    uint32_t prev2 = 0;
     uint8_t send_buffer[1024];
     uint8_t recv_buffer[1024];
 
@@ -258,6 +265,8 @@ int main() {
 
                 httpd_init();
 
+                websocket_init(&ws, 81);
+
                 context.state = STATE_LOOP;
             } break;
             case STATE_LOOP: {
@@ -265,6 +274,19 @@ int main() {
                     prev1 = timestamp;
                     const char *json = "{ \"field\": 69 }";
                     mqtt_publish(mqtt_client, "test", json, strlen(json), 0, 0, NULL, NULL);
+                }
+
+                if((timestamp - prev2) >= 100) {
+                    prev2 = timestamp;
+                    const int16_t frame[6] = {
+                        1.23f + sinf(0.628f * 0.001f * timestamp) * 10,
+                        0.45f + sinf(0.5f * 0.001f * timestamp) * 10,
+                        678.f + sinf(1.f * 0.001f * timestamp) * 10,
+                        47.f + sinf(1.2f * 0.001f * timestamp) * 10,
+                        16.8f + sinf(0.1f * 0.001f * timestamp) * 10,
+                        2.56f + sinf(0.01f * 0.001f * timestamp) * 10,
+                    };
+                    websocket_write(&ws, &frame, sizeof(frame));
                 }
             } break;
         }

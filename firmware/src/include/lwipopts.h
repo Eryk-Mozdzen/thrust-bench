@@ -17,8 +17,9 @@
 #define LWIP_RAND     sys_rng
 #define LWIP_SNTP     0
 
-#define PPP_SUPPORT   1
-#define PPPOS_SUPPORT 1
+#define PPP_SUPPORT                 1
+#define PPPOS_SUPPORT               1
+#define LWIP_INCLUDED_POLARSSL_SHA1 1
 
 #define LWIP_HTTPD_CUSTOM_FILES    1
 #define LWIP_HTTPD_DYNAMIC_HEADERS 1
