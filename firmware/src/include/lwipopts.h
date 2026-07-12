@@ -1,8 +1,6 @@
 #ifndef LWIPOPTS_H
 #define LWIPOPTS_H
 
-#include <stdint.h>
-
 #define NO_SYS        1
 #define MEM_ALIGNMENT 4
 #define MEM_SIZE      (8 * 1024)
@@ -13,9 +11,6 @@
 #define LWIP_UDP      0
 #define LWIP_TCP      1
 #define LWIP_IPV4     1
-#define LWIP_DNS      0
-#define LWIP_RAND     sys_rng
-#define LWIP_SNTP     0
 
 #define PPP_SUPPORT                 1
 #define PPPOS_SUPPORT               1
@@ -23,7 +18,5 @@
 
 #define LWIP_HTTPD_CUSTOM_FILES    1
 #define LWIP_HTTPD_DYNAMIC_HEADERS 1
-
-extern uint32_t sys_rng();
 
 #endif

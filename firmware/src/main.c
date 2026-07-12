@@ -1,4 +1,3 @@
-#include <math.h>
 #include <string.h>
 
 #include <stm32u0xx_hal.h>
@@ -43,8 +42,11 @@ typedef struct {
     button_t button;
 } context_t;
 
+extern TIM_HandleTypeDef htim1;
+extern TIM_HandleTypeDef htim2;
+extern I2C_HandleTypeDef hi2c3;
 extern UART_HandleTypeDef huart2;
-extern RNG_HandleTypeDef hrng;
+extern UART_HandleTypeDef huart3;
 extern const char _binary_index_html_start[];
 extern const char _binary_index_html_end[];
 extern const char _binary_style_css_start[];
@@ -58,8 +60,11 @@ static context_t context;
 
 void SystemClock_Config();
 void MX_GPIO_Init();
+void MX_TIM1_Init();
+void MX_TIM2_Init();
+void MX_I2C3_Init();
 void MX_USART2_UART_Init();
-void MX_RNG_Init();
+void MX_USART3_UART_Init();
 
 static void fifo_init(fifo_t *fifo) {
     fifo->rd = 0;
@@ -142,6 +147,117 @@ static void ws_on_message_cb(void *arg,
     }
 }
 
+typedef enum {
+    HX711_STATE_IDLE,
+    HX711_STATE_SYNC,
+    HX711_STATE_DELAY_START,
+    HX711_STATE_DELAY_LOOP,
+    HX711_STATE_READ_1,
+    HX711_STATE_READ_2,
+    HX711_STATE_END_1,
+    HX711_STATE_END_2,
+    HX711_STATE_END_3,
+} hx711_state_t;
+
+typedef struct {
+    hx711_state_t state;
+    hx711_state_t delay_return;
+    uint32_t delay_time_us;
+    uint32_t bits;
+    uint32_t measurement[3];
+} hx711_t;
+
+static void hx711_init(hx711_t *hx711) {
+    hx711->state = HX711_STATE_IDLE;
+
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_RESET);
+}
+
+static uint32_t hx711_read(hx711_t *hx711, int32_t result[3]) {
+    switch(hx711->state) {
+        case HX711_STATE_IDLE: {
+            hx711->measurement[0] = 0;
+            hx711->measurement[1] = 0;
+            hx711->measurement[2] = 0;
+            hx711->bits = 0;
+            hx711->state = HX711_STATE_SYNC;
+        } break;
+        case HX711_STATE_SYNC: {
+            if((HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_15) == GPIO_PIN_RESET) &&
+               (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_11) == GPIO_PIN_RESET) &&
+               (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_RESET)) {
+                hx711->state = HX711_STATE_DELAY_START;
+                hx711->delay_time_us = 1;
+                hx711->delay_return = HX711_STATE_READ_1;
+            }
+        } break;
+        case HX711_STATE_DELAY_START: {
+            __HAL_TIM_SET_COUNTER(&htim1, 0);
+            HAL_TIM_Base_Start(&htim1);
+            hx711->state = HX711_STATE_DELAY_LOOP;
+        } break;
+        case HX711_STATE_DELAY_LOOP: {
+            if(__HAL_TIM_GET_COUNTER(&htim1) >= hx711->delay_time_us) {
+                HAL_TIM_Base_Stop(&htim1);
+                hx711->state = hx711->delay_return;
+            }
+        } break;
+        case HX711_STATE_READ_1: {
+            if(hx711->bits < 24) {
+                HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_SET);
+                hx711->state = HX711_STATE_DELAY_START;
+                hx711->delay_time_us = 5;
+                hx711->delay_return = HX711_STATE_READ_2;
+            } else {
+                hx711->state = HX711_STATE_END_1;
+            }
+        } break;
+        case HX711_STATE_READ_2: {
+            hx711->measurement[0] <<= 1;
+            hx711->measurement[1] <<= 1;
+            hx711->measurement[2] <<= 1;
+
+            hx711->measurement[0] |= (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_15) == GPIO_PIN_SET);
+            hx711->measurement[1] |= (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_11) == GPIO_PIN_SET);
+            hx711->measurement[2] |= (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_SET);
+
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_RESET);
+            hx711->state = HX711_STATE_DELAY_START;
+            hx711->delay_time_us = 5;
+            hx711->delay_return = HX711_STATE_READ_1;
+
+            hx711->bits++;
+        } break;
+        case HX711_STATE_END_1: {
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_SET);
+            hx711->state = HX711_STATE_DELAY_START;
+            hx711->delay_time_us = 5;
+            hx711->delay_return = HX711_STATE_END_2;
+        } break;
+        case HX711_STATE_END_2: {
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_RESET);
+            hx711->state = HX711_STATE_DELAY_START;
+            hx711->delay_time_us = 5;
+            hx711->delay_return = HX711_STATE_END_3;
+        } break;
+        case HX711_STATE_END_3: {
+            hx711->measurement[0] ^= 0x800000;
+            hx711->measurement[1] ^= 0x800000;
+            hx711->measurement[2] ^= 0x800000;
+
+            hx711->state = HX711_STATE_IDLE;
+
+            result[0] = hx711->measurement[0];
+            result[1] = hx711->measurement[1];
+            result[2] = hx711->measurement[2];
+
+            return 1;
+        } break;
+    }
+
+    return 0;
+}
+
 sys_prot_t sys_arch_protect() {
     return 0;
 }
@@ -156,12 +272,6 @@ uint32_t sys_now() {
 
 uint32_t sys_jiffies() {
     return HAL_GetTick();
-}
-
-uint32_t sys_rng() {
-    uint32_t random = 0;
-    HAL_RNG_GenerateRandomNumber(&hrng, &random);
-    return random;
 }
 
 int fs_open_custom(struct fs_file *file, const char *name) {
@@ -227,8 +337,11 @@ int main() {
     HAL_Init();
     SystemClock_Config();
     MX_GPIO_Init();
+    MX_TIM1_Init();
+    MX_TIM2_Init();
+    MX_I2C3_Init();
     MX_USART2_UART_Init();
-    MX_RNG_Init();
+    MX_USART3_UART_Init();
 
     lwip_init();
 
@@ -244,16 +357,25 @@ int main() {
     fifo_init(&context.fifo_rx);
     HAL_UART_Receive_IT(&huart2, (uint8_t *)&recv_byte, 1);
 
+    hx711_t hx711;
+    hx711_init(&hx711);
+
     uint32_t prev1 = 0;
     uint32_t prev2 = 0;
     uint8_t send_buffer[1024];
     uint8_t recv_buffer[1024];
 
+    float thrust = 0;
+    float torque = 0;
+
+    int32_t load_raw[3] = {0};
+    int32_t load_offset[3] = {0};
+
     while(1) {
         const uint32_t timestamp = HAL_GetTick();
 
-        // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5,
-        //                   ((timestamp % 1000) < 50) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5,
+                          ((timestamp % 1000) < 50) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
         switch(context.state) {
             case STATE_DISCONNECTED: {
@@ -297,21 +419,18 @@ int main() {
 
             } break;
             case STATE_LOOP: {
-                if((timestamp - prev1) >= 1000) {
+                if((timestamp - prev1) >= 100) {
                     prev1 = timestamp;
-                    const char *json = "{ \"field\": 69 }";
-                    mqtt_publish(mqtt_client, "test", json, strlen(json), 0, 0, NULL, NULL);
+                    const float frame[6] = {
+                        thrust, torque, 0.f, 0.f, 0.f, 0.f,
+                    };
+                    mqtt_publish(mqtt_client, "data", frame, sizeof(frame), 0, 0, NULL, NULL);
                 }
 
                 if((timestamp - prev2) >= 100) {
                     prev2 = timestamp;
-                    const int16_t frame[6] = {
-                        1.23f + sinf(0.628f * 0.001f * timestamp) * 10,
-                        0.45f + sinf(0.5f * 0.001f * timestamp) * 10,
-                        678.f + sinf(1.f * 0.001f * timestamp) * 10,
-                        47.f + sinf(1.2f * 0.001f * timestamp) * 10,
-                        16.8f + sinf(0.1f * 0.001f * timestamp) * 10,
-                        2.56f + sinf(0.01f * 0.001f * timestamp) * 10,
+                    const float frame[6] = {
+                        thrust, torque, 0.f, 0.f, 0.f, 0.f,
                     };
                     for(struct websocket_client *client = ws_server->clients; client != NULL;
                         client = client->next) {
@@ -326,17 +445,30 @@ int main() {
 
             } break;
             case BUTTON_OFFSET: {
-                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+                load_offset[0] = load_raw[0];
+                load_offset[1] = load_raw[1];
+                load_offset[2] = load_raw[2];
                 context.button = BUTTON_NONE;
             } break;
             case BUTTON_THRUST: {
-                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+                // TODO
                 context.button = BUTTON_NONE;
             } break;
             case BUTTON_TORQUE: {
-                HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+                // TODO
                 context.button = BUTTON_NONE;
             } break;
+        }
+
+        if(hx711_read(&hx711, load_raw)) {
+            const int32_t load[3] = {
+                load_raw[0] - load_offset[0],
+                load_raw[1] - load_offset[1],
+                load_raw[2] - load_offset[2],
+            };
+
+            thrust = load[0];
+            torque = 0.5f * (load[1] + load[2]);
         }
 
         const uint32_t recv_len = fifo_read(&context.fifo_rx, recv_buffer, sizeof(recv_buffer));

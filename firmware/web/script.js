@@ -19,7 +19,7 @@ ws.onmessage = (event) => {
     const view = new DataView(event.data)
 
     for(let i = 0; i < ids.length; i++) {
-        const value = view.getInt16(i * 2, true) / 10.0
+        const value = view.getFloat32(i * 4, true)
         document.getElementById(ids[i]).textContent = value.toFixed(1)
     }
 }
