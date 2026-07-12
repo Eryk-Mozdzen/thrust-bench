@@ -1,5 +1,4 @@
 #include <math.h>
-#include <stdbool.h>
 #include <string.h>
 
 #include <stm32u0xx_hal.h>
@@ -26,14 +25,22 @@ typedef enum {
     STATE_DISCONNECTED,
     STATE_CONNECTING,
     STATE_CONNECTED,
+    STATE_WAITING_MQTT,
     STATE_LOOP,
 } state_t;
+
+typedef enum {
+    BUTTON_NONE,
+    BUTTON_OFFSET,
+    BUTTON_THRUST,
+    BUTTON_TORQUE,
+} button_t;
 
 typedef struct {
     fifo_t fifo_tx;
     fifo_t fifo_rx;
     state_t state;
-    bool mqtt_connected;
+    button_t button;
 } context_t;
 
 extern UART_HandleTypeDef huart2;
@@ -113,7 +120,7 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
     context_t *context = arg;
 
     if(status == MQTT_CONNECT_ACCEPTED) {
-        context->mqtt_connected = true;
+        context->state = STATE_LOOP;
     }
 }
 
@@ -121,18 +128,17 @@ static void ws_on_message_cb(void *arg,
                              struct websocket_client *client,
                              const void *message,
                              u32_t message_len) {
-    // context_t *context = arg;
-
-    (void)arg;
     (void)client;
     (void)message_len;
 
+    context_t *context = arg;
+
     if(strcmp(message, "offset") == 0) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+        context->button = BUTTON_OFFSET;
     } else if(strcmp(message, "thrust") == 0) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+        context->button = BUTTON_THRUST;
     } else if(strcmp(message, "torque") == 0) {
-        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+        context->button = BUTTON_TORQUE;
     }
 }
 
@@ -231,8 +237,6 @@ int main() {
     ppp_set_default(ppp);
 
     mqtt_client_t *mqtt_client = NULL;
-    context.mqtt_connected = false;
-
     websocket_server_t *ws_server = NULL;
 
     context.state = STATE_DISCONNECTED;
@@ -253,7 +257,6 @@ int main() {
 
         switch(context.state) {
             case STATE_DISCONNECTED: {
-                context.mqtt_connected = false;
                 context.state = STATE_CONNECTING;
                 ppp_connect(ppp, 0);
             } break;
@@ -288,10 +291,13 @@ int main() {
                 websocket_arg(ws_server, &context);
                 websocket_on_message(ws_server, ws_on_message_cb);
 
-                context.state = STATE_LOOP;
+                context.state = STATE_WAITING_MQTT;
+            } break;
+            case STATE_WAITING_MQTT: {
+
             } break;
             case STATE_LOOP: {
-                if(((timestamp - prev1) >= 1000) && context.mqtt_connected) {
+                if((timestamp - prev1) >= 1000) {
                     prev1 = timestamp;
                     const char *json = "{ \"field\": 69 }";
                     mqtt_publish(mqtt_client, "test", json, strlen(json), 0, 0, NULL, NULL);
@@ -312,6 +318,24 @@ int main() {
                         websocket_send(client, &frame, sizeof(frame));
                     }
                 }
+            } break;
+        }
+
+        switch(context.button) {
+            case BUTTON_NONE: {
+
+            } break;
+            case BUTTON_OFFSET: {
+                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+                context.button = BUTTON_NONE;
+            } break;
+            case BUTTON_THRUST: {
+                HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+                context.button = BUTTON_NONE;
+            } break;
+            case BUTTON_TORQUE: {
+                HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+                context.button = BUTTON_NONE;
             } break;
         }
 
