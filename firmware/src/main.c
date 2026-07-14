@@ -12,6 +12,7 @@
 #include <netif/ppp/ppp.h>
 #include <netif/ppp/pppos.h>
 
+#include "ina226_regs.h"
 #include "websocket.h"
 
 typedef struct {
@@ -258,6 +259,83 @@ static uint32_t hx711_read(hx711_t *hx711, int32_t result[3]) {
     return 0;
 }
 
+#define PWR_R_SHUNT     0.0039f
+#define PWR_MAX_CURRENT 30.f
+
+typedef enum {
+    INA226_STATE_IDLE,
+    INA226_STATE_WAIT_FOR_VOLTAGE,
+    INA226_STATE_WAIT_FOR_CURRENT,
+} ina226_state_t;
+
+static volatile uint8_t i2c_buffer[2];
+static volatile uint8_t i2c_ready = 0;
+
+typedef struct {
+    ina226_state_t state;
+    int16_t voltage;
+    int16_t current;
+} ina226_t;
+
+static void ina226_write(uint8_t address, uint16_t value) {
+    uint8_t reverse[2] = {(uint8_t)(value >> 8), (uint8_t)(value)};
+
+    HAL_I2C_Mem_Write(&hi2c3, INA226_ADDR << 1, address, 1, reverse, 2, 100);
+}
+
+static void ina226_init(ina226_t *ina226) {
+    ina226->state = INA226_STATE_IDLE;
+
+    ina226_write(INA226_REG_CONFIGURATION, INA226_CONFIGURATION_RESET);
+
+    HAL_Delay(100);
+
+    ina226_write(INA226_REG_CONFIGURATION, INA226_CONFIGURATION_AVERAGE_1 |
+                                               INA226_CONFIGURATION_BUS_VOLTAGE_CONV_1_1MS |
+                                               INA226_CONFIGURATION_SHUNT_VOLTAGE_CONV_1_1MS |
+                                               INA226_CONFIGURATION_MODE_CONTINUOUS_SHUNT_BUS);
+
+    ina226_write(INA226_REG_MASK_ENABLE, INA226_MASK_ENABLE_CONVERSION_READY |
+                                             INA226_MASK_ENABLE_ALERT_POLARITY_ACTIVE_LOW |
+                                             INA226_MASK_ENABLE_ALERT_LATCH_TRANSPARENT);
+
+    const uint16_t calib = INA226_CALIBRATION_VALUE(PWR_MAX_CURRENT, PWR_R_SHUNT);
+
+    ina226_write(INA226_REG_CALIBRATION, calib);
+}
+
+static void ina226_read(ina226_t *ina226, float *voltage, float *current) {
+    switch(ina226->state) {
+        case INA226_STATE_IDLE: {
+            ina226->state = INA226_STATE_WAIT_FOR_VOLTAGE;
+
+            i2c_ready = 0;
+            HAL_I2C_Mem_Read_IT(&hi2c3, INA226_ADDR << 1, INA226_REG_BUS_VOLTAGE, 1,
+                                (uint8_t *)i2c_buffer, 2);
+        } break;
+        case INA226_STATE_WAIT_FOR_VOLTAGE: {
+            if(i2c_ready) {
+                ina226->voltage = (((uint16_t)i2c_buffer[0]) << 8) | i2c_buffer[1];
+                ina226->state = INA226_STATE_WAIT_FOR_CURRENT;
+
+                i2c_ready = 0;
+                HAL_I2C_Mem_Read_IT(&hi2c3, INA226_ADDR << 1, INA226_REG_CURRENT, 1,
+                                    (uint8_t *)i2c_buffer, 2);
+            }
+        } break;
+        case INA226_STATE_WAIT_FOR_CURRENT: {
+            if(i2c_ready) {
+                ina226->current = (((uint16_t)i2c_buffer[0]) << 8) | i2c_buffer[1];
+
+                *voltage = ina226->voltage * INA226_LSB_BUS_VOLTAGE;
+                *current = ina226->current * INA226_LSB_CURRENT(PWR_MAX_CURRENT);
+
+                ina226->state = INA226_STATE_IDLE;
+            }
+        } break;
+    }
+}
+
 sys_prot_t sys_arch_protect() {
     return 0;
 }
@@ -333,6 +411,12 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     }
 }
 
+void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
+    if(hi2c == &hi2c3) {
+        i2c_ready = 1;
+    }
+}
+
 int main() {
     HAL_Init();
     SystemClock_Config();
@@ -363,15 +447,21 @@ int main() {
     HAL_TIM_Base_Start(&htim2);
     __HAL_TIM_SET_COUNTER(&htim2, 0);
 
+    ina226_t ina226;
+    ina226_init(&ina226);
+
     uint32_t prev1 = 0;
     uint32_t prev2 = 0;
     uint32_t prev3 = 0;
+    uint32_t prev4 = 0;
     uint8_t send_buffer[1024];
     uint8_t recv_buffer[1024];
 
     float thrust = 0;
     float torque = 0;
     float velocity = 0;
+    float voltage = 0;
+    float current = 0;
 
     int32_t load_raw[3] = {0};
     int32_t load_offset[3] = {0};
@@ -427,7 +517,7 @@ int main() {
                 if((timestamp - prev1) >= 100) {
                     prev1 = timestamp;
                     const float frame[6] = {
-                        thrust, torque, velocity, 0.f, 0.f, 0.f,
+                        thrust, torque, velocity, 0.f, voltage, current,
                     };
                     mqtt_publish(mqtt_client, "data", frame, sizeof(frame), 0, 0, NULL, NULL);
                 }
@@ -435,7 +525,7 @@ int main() {
                 if((timestamp - prev2) >= 100) {
                     prev2 = timestamp;
                     const float frame[6] = {
-                        thrust, torque, velocity, 0.f, 0.f, 0.f,
+                        thrust, torque, velocity, 0.f, voltage, current,
                     };
                     for(struct websocket_client *client = ws_server->clients; client != NULL;
                         client = client->next) {
@@ -482,6 +572,11 @@ int main() {
             velocity = 6.283185307f * rotations / delta;
             prev3 = timestamp;
             __HAL_TIM_SET_COUNTER(&htim2, 0);
+        }
+
+        if((timestamp - prev4) >= 50) {
+            prev4 = timestamp;
+            ina226_read(&ina226, &voltage, &current);
         }
 
         const uint32_t recv_len = fifo_read(&context.fifo_rx, recv_buffer, sizeof(recv_buffer));
