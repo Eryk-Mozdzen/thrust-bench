@@ -360,13 +360,18 @@ int main() {
     hx711_t hx711;
     hx711_init(&hx711);
 
+    HAL_TIM_Base_Start(&htim2);
+    __HAL_TIM_SET_COUNTER(&htim2, 0);
+
     uint32_t prev1 = 0;
     uint32_t prev2 = 0;
+    uint32_t prev3 = 0;
     uint8_t send_buffer[1024];
     uint8_t recv_buffer[1024];
 
     float thrust = 0;
     float torque = 0;
+    float velocity = 0;
 
     int32_t load_raw[3] = {0};
     int32_t load_offset[3] = {0};
@@ -422,7 +427,7 @@ int main() {
                 if((timestamp - prev1) >= 100) {
                     prev1 = timestamp;
                     const float frame[6] = {
-                        thrust, torque, 0.f, 0.f, 0.f, 0.f,
+                        thrust, torque, velocity, 0.f, 0.f, 0.f,
                     };
                     mqtt_publish(mqtt_client, "data", frame, sizeof(frame), 0, 0, NULL, NULL);
                 }
@@ -430,7 +435,7 @@ int main() {
                 if((timestamp - prev2) >= 100) {
                     prev2 = timestamp;
                     const float frame[6] = {
-                        thrust, torque, 0.f, 0.f, 0.f, 0.f,
+                        thrust, torque, velocity, 0.f, 0.f, 0.f,
                     };
                     for(struct websocket_client *client = ws_server->clients; client != NULL;
                         client = client->next) {
@@ -469,6 +474,14 @@ int main() {
 
             thrust = load[0];
             torque = 0.5f * (load[1] + load[2]);
+        }
+
+        if((timestamp - prev3) >= 100) {
+            const uint32_t rotations = __HAL_TIM_GET_COUNTER(&htim2);
+            const float delta = 0.001f * (timestamp - prev3);
+            velocity = 6.283185307f * rotations / delta;
+            prev3 = timestamp;
+            __HAL_TIM_SET_COUNTER(&htim2, 0);
         }
 
         const uint32_t recv_len = fifo_read(&context.fifo_rx, recv_buffer, sizeof(recv_buffer));
