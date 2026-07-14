@@ -145,19 +145,12 @@ static void ws_on_message_cb(void *arg,
 typedef enum {
     HX711_STATE_IDLE,
     HX711_STATE_SYNC,
-    HX711_STATE_DELAY_START,
-    HX711_STATE_DELAY_LOOP,
-    HX711_STATE_READ_1,
-    HX711_STATE_READ_2,
-    HX711_STATE_END_1,
-    HX711_STATE_END_2,
-    HX711_STATE_END_3,
+    HX711_STATE_READ,
+    HX711_STATE_END,
 } hx711_state_t;
 
 typedef struct {
     hx711_state_t state;
-    hx711_state_t delay_return;
-    uint32_t delay_time_us;
     uint32_t bits;
     uint32_t measurement[3];
 } hx711_t;
@@ -166,6 +159,12 @@ static void hx711_init(hx711_t *hx711) {
     hx711->state = HX711_STATE_IDLE;
 
     HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_RESET);
+}
+
+static void hx711_wait_us(const uint32_t time_us) {
+    __HAL_TIM_SET_COUNTER(&htim1, 0);
+    while(__HAL_TIM_GET_COUNTER(&htim1) < time_us) {
+    }
 }
 
 static uint32_t hx711_read(hx711_t *hx711, int32_t result[3]) {
@@ -181,61 +180,37 @@ static uint32_t hx711_read(hx711_t *hx711, int32_t result[3]) {
             if((HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_15) == GPIO_PIN_RESET) &&
                (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_11) == GPIO_PIN_RESET) &&
                (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_RESET)) {
-                hx711->state = HX711_STATE_DELAY_START;
-                hx711->delay_time_us = 1;
-                hx711->delay_return = HX711_STATE_READ_1;
+                hx711_wait_us(1);
+                hx711->state = HX711_STATE_READ;
             }
         } break;
-        case HX711_STATE_DELAY_START: {
-            __HAL_TIM_SET_COUNTER(&htim1, 0);
-            HAL_TIM_Base_Start(&htim1);
-            hx711->state = HX711_STATE_DELAY_LOOP;
-        } break;
-        case HX711_STATE_DELAY_LOOP: {
-            if(__HAL_TIM_GET_COUNTER(&htim1) >= hx711->delay_time_us) {
-                HAL_TIM_Base_Stop(&htim1);
-                hx711->state = hx711->delay_return;
-            }
-        } break;
-        case HX711_STATE_READ_1: {
+        case HX711_STATE_READ: {
             if(hx711->bits < 24) {
                 HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_SET);
-                hx711->state = HX711_STATE_DELAY_START;
-                hx711->delay_time_us = 5;
-                hx711->delay_return = HX711_STATE_READ_2;
+                hx711_wait_us(5);
+
+                hx711->measurement[0] <<= 1;
+                hx711->measurement[1] <<= 1;
+                hx711->measurement[2] <<= 1;
+
+                hx711->measurement[0] |= (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_15) == GPIO_PIN_SET);
+                hx711->measurement[1] |= (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_11) == GPIO_PIN_SET);
+                hx711->measurement[2] |= (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_SET);
+
+                HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_RESET);
+                hx711_wait_us(5);
+
+                hx711->bits++;
             } else {
-                hx711->state = HX711_STATE_END_1;
+                hx711->state = HX711_STATE_END;
             }
         } break;
-        case HX711_STATE_READ_2: {
-            hx711->measurement[0] <<= 1;
-            hx711->measurement[1] <<= 1;
-            hx711->measurement[2] <<= 1;
-
-            hx711->measurement[0] |= (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_15) == GPIO_PIN_SET);
-            hx711->measurement[1] |= (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_11) == GPIO_PIN_SET);
-            hx711->measurement[2] |= (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_SET);
-
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_RESET);
-            hx711->state = HX711_STATE_DELAY_START;
-            hx711->delay_time_us = 5;
-            hx711->delay_return = HX711_STATE_READ_1;
-
-            hx711->bits++;
-        } break;
-        case HX711_STATE_END_1: {
+        case HX711_STATE_END: {
             HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_SET);
-            hx711->state = HX711_STATE_DELAY_START;
-            hx711->delay_time_us = 5;
-            hx711->delay_return = HX711_STATE_END_2;
-        } break;
-        case HX711_STATE_END_2: {
+            hx711_wait_us(5);
             HAL_GPIO_WritePin(GPIOC, GPIO_PIN_12, GPIO_PIN_RESET);
-            hx711->state = HX711_STATE_DELAY_START;
-            hx711->delay_time_us = 5;
-            hx711->delay_return = HX711_STATE_END_3;
-        } break;
-        case HX711_STATE_END_3: {
+            hx711_wait_us(5);
+
             hx711->measurement[0] ^= 0x800000;
             hx711->measurement[1] ^= 0x800000;
             hx711->measurement[2] ^= 0x800000;
@@ -438,6 +413,7 @@ int main() {
     hx711_t hx711;
     hx711_init(&hx711);
 
+    HAL_TIM_Base_Start(&htim1);
     HAL_TIM_Base_Start(&htim2);
     __HAL_TIM_SET_COUNTER(&htim2, 0);
 
