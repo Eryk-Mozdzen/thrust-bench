@@ -32,8 +32,6 @@ typedef enum {
 typedef enum {
     BUTTON_NONE,
     BUTTON_OFFSET,
-    BUTTON_THRUST,
-    BUTTON_TORQUE,
 } button_t;
 
 typedef struct {
@@ -141,10 +139,6 @@ static void ws_on_message_cb(void *arg,
 
     if(strcmp(message, "offset") == 0) {
         context->button = BUTTON_OFFSET;
-    } else if(strcmp(message, "thrust") == 0) {
-        context->button = BUTTON_THRUST;
-    } else if(strcmp(message, "torque") == 0) {
-        context->button = BUTTON_TORQUE;
     }
 }
 
@@ -545,14 +539,6 @@ int main() {
                 load_offset[2] = load_raw[2];
                 context.button = BUTTON_NONE;
             } break;
-            case BUTTON_THRUST: {
-                // TODO
-                context.button = BUTTON_NONE;
-            } break;
-            case BUTTON_TORQUE: {
-                // TODO
-                context.button = BUTTON_NONE;
-            } break;
         }
 
         if(hx711_read(&hx711, load_raw)) {
@@ -562,8 +548,13 @@ int main() {
                 load_raw[2] - load_offset[2],
             };
 
-            thrust = load[0];
-            torque = 0.5f * (load[1] + load[2]);
+            const float g = 9.8067f;
+            const float arm = 0.270f;
+            const float k1 = 0.265f / -105000.f;
+            const float k2 = 0.2115f / -1711939.f;
+
+            thrust = load[0] * k1 * g;
+            torque = 0.5f * (load[1] + load[2]) * k2 * arm * g;
         }
 
         if((timestamp - prev3) >= 100) {

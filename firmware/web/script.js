@@ -7,21 +7,14 @@ ws.onerror = (e) => {
 }
 
 ws.onmessage = (event) => {
-    const ids = [
-        "thrust",
-        "torque",
-        "velocity",
-        "temperature",
-        "voltage",
-        "current"
-    ]
-
     const view = new DataView(event.data)
 
-    for(let i = 0; i < ids.length; i++) {
-        const value = view.getFloat32(i * 4, true)
-        document.getElementById(ids[i]).textContent = value.toFixed(1)
-    }
+    document.getElementById("thrust").textContent = view.getFloat32(0, true).toFixed(3)
+    document.getElementById("torque").textContent = view.getFloat32(4, true).toFixed(5)
+    document.getElementById("velocity").textContent = view.getFloat32(8, true).toFixed(0)
+    document.getElementById("temperature").textContent = view.getFloat32(12, true).toFixed(1)
+    document.getElementById("voltage").textContent = view.getFloat32(16, true).toFixed(1)
+    document.getElementById("current").textContent = view.getFloat32(20, true).toFixed(1)
 }
 
 function sendCommand(cmd) {
