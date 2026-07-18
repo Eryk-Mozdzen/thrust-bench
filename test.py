@@ -99,6 +99,7 @@ class Focus:
         print((await self.reader.readline()).decode().strip())
         print((await self.reader.readline()).decode().strip())
 
+        await self.send("stop")
         await self.send("calib_full")
         await asyncio.sleep(10)
 
