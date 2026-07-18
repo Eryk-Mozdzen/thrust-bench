@@ -23,6 +23,46 @@ typedef enum {
     OPCODE_PONG = 10,
 } opcode_t;
 
+static void request_get_key(const char *request, const u32_t request_len, char key[24]) {
+    const char header[] = "Sec-WebSocket-Key:";
+    const u32_t header_len = sizeof(header) - 1;
+
+    u32_t header_pos = 0;
+
+    while(header_pos < request_len) {
+        u32_t line_end = header_pos;
+
+        while((line_end < request_len) && (request[line_end] != '\n') &&
+              (request[line_end] != '\r')) {
+            line_end++;
+        }
+
+        const u32_t line_len = line_end - header_pos;
+
+        if((line_len >= header_len) && (memcmp(request + header_pos, header, header_len) == 0)) {
+            u32_t value_pos = header_pos + header_len;
+
+            while((value_pos < line_end) &&
+                  ((request[value_pos] == ' ') || (request[value_pos] == '\t'))) {
+                value_pos++;
+            }
+
+            if((line_end - value_pos) != 24) {
+                return;
+            }
+
+            memcpy(key, request + value_pos, 24);
+        }
+
+        while((line_end < request_len) &&
+              ((request[line_end] == '\r') || (request[line_end] == '\n'))) {
+            line_end++;
+        }
+
+        header_pos = line_end;
+    }
+}
+
 static u32_t base64_encode(char *dest, const u8_t *input, const u32_t input_length) {
     const char encoding_table[] = {
         'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
@@ -64,7 +104,7 @@ static void payload_unmask(u8_t *output,
     }
 }
 
-static err_t connection_close(struct websocket_client *client) {
+static err_t connection_cleanup(struct websocket_client *client) {
     const err_t err = tcp_close(client->pcb);
 
     if(client->next != NULL) {
@@ -86,6 +126,10 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
     struct websocket_client *client = arg;
     websocket_server_t *wss = client->server;
 
+    if(p == NULL) {
+        return connection_cleanup(client);
+    }
+
     tcp_recved(pcb, p->tot_len);
 
     const u8_t *data = p->payload;
@@ -94,24 +138,7 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
         case WEBSOCKET_STATE_CONNECTING: {
             char key[24] = {0};
 
-            const char *token = (const char *)data;
-            const char *newline = NULL;
-            do {
-                newline = strchr(token, '\n');
-                const u32_t token_len = newline - token - 1;
-
-                const char *key_header = "Sec-WebSocket-Key";
-                const u32_t key_header_len = strlen(key_header);
-                const u32_t key_len = 24;
-
-                if(token_len >= (key_header_len + key_len)) {
-                    if(memcmp(token, key_header, key_header_len) == 0) {
-                        memcpy(key, token + token_len - key_len, key_len);
-                    }
-                }
-
-                token = newline + 1;
-            } while(newline != NULL);
+            request_get_key(p->payload, p->tot_len, key);
 
             if(key[0] != 0) {
                 const char *magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -131,10 +158,9 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
 
                 base64_encode(&response[56], sha1, sizeof(sha1));
 
-                if(tcp_write(pcb, response, strlen(response), TCP_WRITE_FLAG_COPY) == ERR_OK) {
-                    tcp_output(pcb);
-                    client->state = WEBSOCKET_STATE_OPEN;
-                }
+                tcp_write(pcb, response, strlen(response), TCP_WRITE_FLAG_COPY);
+                tcp_output(pcb);
+                client->state = WEBSOCKET_STATE_OPEN;
             }
         } break;
         case WEBSOCKET_STATE_OPEN: {
@@ -182,7 +208,7 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
                             tcp_write(client->pcb, frame, sizeof(frame), TCP_WRITE_FLAG_COPY);
                         }
                         tcp_output(client->pcb);
-                        connection_close(client);
+                        connection_cleanup(client);
                     }
                 } break;
                 case OPCODE_PING: {
@@ -212,7 +238,7 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
                     wss->on_close(wss->arg, client);
                 }
                 client->state = WEBSOCKET_STATE_CLOSED;
-                connection_close(client);
+                connection_cleanup(client);
             }
         } break;
         case WEBSOCKET_STATE_CLOSED: {
