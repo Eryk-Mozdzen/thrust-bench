@@ -153,8 +153,7 @@ class Bench:
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        # await self.ws.close()
-        self.ws.transport.close()
+        await self.ws.close()
 
     async def run(self, queue):
         try:

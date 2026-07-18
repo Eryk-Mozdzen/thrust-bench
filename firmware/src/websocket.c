@@ -1,7 +1,6 @@
 // TODO: handle fragmented messages
 // TODO: handle payload length 7+16
 // TODO: handle payload length 7+64
-// TODO: handle close handshake
 
 #include <stddef.h>
 #include <string.h>
@@ -65,16 +64,27 @@ static void payload_unmask(u8_t *output,
     }
 }
 
+static err_t connection_close(struct websocket_client *client) {
+    const err_t err = tcp_close(client->pcb);
+
+    if(client->next != NULL) {
+        client->next->prev = client->prev;
+    }
+
+    if(client->prev != NULL) {
+        client->prev->next = client->next;
+    } else {
+        client->server->clients = client->next;
+    }
+
+    mem_free(client);
+
+    return err;
+}
+
 static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
     struct websocket_client *client = arg;
     websocket_server_t *wss = client->server;
-
-    if(p == NULL) {
-        if(wss->on_close != NULL) {
-            wss->on_close(wss->arg, client);
-        }
-        return websocket_close(client);
-    }
 
     tcp_recved(pcb, p->tot_len);
 
@@ -153,7 +163,27 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
                     }
                 } break;
                 case OPCODE_CLOSE: {
-
+                    if(payload_len <= 125) {
+                        client->state = WEBSOCKET_STATE_CLOSED;
+                        if(payload_len >= 2) {
+                            u8_t frame[4];
+                            frame[0] = 0x80 | ((OPCODE_CLOSE << 0) & 0x0F);
+                            frame[1] = ((2 << 0) & 0x7F);
+                            if(masked) {
+                                payload_unmask(&frame[2], &data[6], 2, &data[2]);
+                            } else {
+                                memcpy(&frame[2], &data[2], 2);
+                            }
+                            tcp_write(client->pcb, frame, sizeof(frame), TCP_WRITE_FLAG_COPY);
+                        } else {
+                            u8_t frame[2];
+                            frame[0] = 0x80 | ((OPCODE_CLOSE << 0) & 0x0F);
+                            frame[1] = ((0 << 0) & 0x7F);
+                            tcp_write(client->pcb, frame, sizeof(frame), TCP_WRITE_FLAG_COPY);
+                        }
+                        tcp_output(client->pcb);
+                        connection_close(client);
+                    }
                 } break;
                 case OPCODE_PING: {
                     if(payload_len <= 125) {
@@ -175,7 +205,15 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
             }
         } break;
         case WEBSOCKET_STATE_CLOSING: {
+            const opcode_t opcode = (data[0] & 0x0F);
 
+            if(opcode == OPCODE_CLOSE) {
+                if(wss->on_close != NULL) {
+                    wss->on_close(wss->arg, client);
+                }
+                client->state = WEBSOCKET_STATE_CLOSED;
+                connection_close(client);
+            }
         } break;
         case WEBSOCKET_STATE_CLOSED: {
 
@@ -283,12 +321,10 @@ err_t websocket_send(struct websocket_client *client, const void *message, u32_t
     memcpy(&frame[2], message, message_len);
 
     err_t err;
-
     err = tcp_write(client->pcb, frame, 2 + message_len, TCP_WRITE_FLAG_COPY);
     if(err != ERR_OK) {
         return err;
     }
-
     err = tcp_output(client->pcb);
     if(err != ERR_OK) {
         return err;
@@ -304,19 +340,23 @@ err_t websocket_close(struct websocket_client *client) {
 
     client->state = WEBSOCKET_STATE_CLOSING;
 
-    const err_t err = tcp_close(client->pcb);
+    const uint16_t status_code = 1000;
 
-    if(client->next != NULL) {
-        client->next->prev = client->prev;
+    u8_t frame[4];
+    frame[0] = 0x80 | ((OPCODE_CLOSE << 0) & 0x0F);
+    frame[1] = ((2 << 0) & 0x7F);
+    frame[2] = (status_code >> 8) & 0xFF;
+    frame[3] = (status_code >> 0) & 0xFF;
+
+    err_t err;
+    err = tcp_write(client->pcb, frame, sizeof(frame), TCP_WRITE_FLAG_COPY);
+    if(err != ERR_OK) {
+        return err;
+    }
+    err = tcp_output(client->pcb);
+    if(err != ERR_OK) {
+        return err;
     }
 
-    if(client->prev != NULL) {
-        client->prev->next = client->next;
-    } else {
-        client->server->clients = client->next;
-    }
-
-    mem_free(client);
-
-    return err;
+    return ERR_OK;
 }
