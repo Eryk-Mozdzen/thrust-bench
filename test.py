@@ -64,7 +64,7 @@ class Bus:
 class Experiment:
     def __init__(self):
         self.value = 0
-        self.value_max = 0.03
+        self.value_max = 0.1
         self.step_value = 0.001
         self.step_duration = 1
 
@@ -299,14 +299,14 @@ class Recorder:
 
                 if header:
                     header = False
-                    self.file.write("timestamp,")
+                    self.file.write("timestamp")
                     for key in data.keys():
-                        self.file.write(f"{key},")
+                        self.file.write(f",{key}")
                     self.file.write("\n")
 
-                self.file.write(f"{timestamp},")
+                self.file.write(f"{timestamp}")
                 for _, value in data.items():
-                    self.file.write(f"{value},")
+                    self.file.write(f",{value}")
                 self.file.write("\n")
 
                 self.file.flush()

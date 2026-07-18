@@ -574,7 +574,8 @@ int main() {
         if((timestamp - prev2) >= 100) {
             const uint32_t rotations = __HAL_TIM_GET_COUNTER(&htim2);
             const float delta = 0.001f * (timestamp - prev2);
-            velocity = 6.283185307f * rotations / delta;
+            const float k = 0.1f;
+            velocity = ((1.f - k) * velocity) + (k * 6.283185307f * rotations / delta);
             prev2 = timestamp;
             __HAL_TIM_SET_COUNTER(&htim2, 0);
         }
