@@ -6,7 +6,9 @@
 #     "aiomqtt",
 #     "msgpack",
 #     "datetime",
-#     "matplotlib",
+#     "PyQt6",
+#     "pyqtgraph",
+#     "qasync",
 # ]
 # ///
 
@@ -15,8 +17,12 @@ import aiomqtt
 import msgpack
 import struct
 import datetime
-import matplotlib.pyplot as plt
+import numpy as np
+import pyqtgraph as pg
+from PyQt6.QtWidgets import QApplication
+from qasync import QEventLoop
 from collections import deque
+import sys
 
 
 class Bus:
@@ -64,7 +70,7 @@ class Focus:
 
                 await queue.put(
                     (
-                        datetime.datetime.now(),
+                        datetime.datetime.now(datetime.UTC),
                         {
                             "focus_voltage": state["supply"],
                             "focus_velocity": state["velocity"],
@@ -87,7 +93,7 @@ class Bench:
 
                 await queue.put(
                     (
-                        datetime.datetime.now(),
+                        datetime.datetime.now(datetime.UTC),
                         {
                             "true_thrust": thrust,
                             "true_torque": torque,
@@ -101,91 +107,103 @@ class Bench:
 
 
 class Plotter:
-    def __init__(self, signals, max_points=100, refresh_rate=10):
-        plt.ion()
-
+    def __init__(
+        self,
+        signals,
+        max_points=200,
+        refresh_rate=10,
+        autoscale=True,
+    ):
+        pg.setConfigOption("background", "w")
+        pg.setConfigOption("foreground", "k")
+        pg.setConfigOptions(antialias=True)
         self.signals = signals
         self.max_points = max_points
         self.refresh_period = 1.0 / refresh_rate
-
-        self.fig, self.ax = plt.subplots()
-
+        self.autoscale = autoscale
+        self.time_window = 10
         self.last_draw = 0
-        self.start = datetime.datetime.now()
-
+        self.start = datetime.datetime.now(datetime.UTC)
+        self.win = pg.GraphicsLayoutWidget(show=True, title="Telemetry")
+        self.plot = self.win.addPlot()
         self.values = {}
-
         if isinstance(signals, tuple):
             self.mode = "scatter"
-
             self.values[signals[0]] = deque(maxlen=max_points)
             self.values[signals[1]] = deque(maxlen=max_points)
-
-            self.artist = self.ax.scatter([], [])
-
-            self.ax.set_xlabel(signals[0])
-            self.ax.set_ylabel(signals[1])
-
+            self.scatter = pg.ScatterPlotItem(size=6)
+            self.plot.addItem(self.scatter)
+            self.plot.setLabel("bottom", signals[0])
+            self.plot.setLabel("left", signals[1])
         else:
+            self.plot.addLegend()
+            colors = [
+                "#1f77b4",
+                "#d62728",
+                "#2ca02c",
+                "#ff7f0e",
+                "#9467bd",
+                "#17becf",
+            ]
             self.mode = "line"
-
             self.lines = []
-
-            for s in signals:
-                self.values[s] = deque(maxlen=max_points)
-
-                (line,) = self.ax.plot([], [], label=s)
+            for i, signal in enumerate(signals):
+                self.values[signal] = deque(maxlen=max_points)
+                line = self.plot.plot(
+                    pen=pg.mkPen(colors[i % len(colors)], width=2),
+                    name=signal,
+                )
                 self.lines.append(line)
+            self.plot.setLabel("bottom", "time [s]")
+        self.plot.showGrid(x=True, y=True)
+        if not autoscale:
+            self.plot.enableAutoRange(False, False)
 
-            self.ax.legend()
-            self.ax.set_xlabel("time [s]")
-
-        self.ax.grid()
-        plt.show(block=False)
+    def _timestamp_to_float(self, timestamp):
+        if isinstance(timestamp, datetime.datetime):
+            return (timestamp - self.start).total_seconds()
+        return float(timestamp)
 
     async def run(self, queue):
         while True:
             timestamp, data = await queue.get()
-
             if self.mode == "line":
-                for s in self.signals:
-                    self.values[s].append(
-                        ((timestamp - self.start).total_seconds(), data[s])
-                    )
-
+                t = self._timestamp_to_float(timestamp)
+                for signal in self.signals:
+                    value = data.get(signal)
+                    if value is not None:
+                        self.values[signal].append((t, value))
             else:
-                self.values[self.signals[0]].append(data[self.signals[0]])
-                self.values[self.signals[1]].append(data[self.signals[1]])
-
+                x = data.get(self.signals[0])
+                y = data.get(self.signals[1])
+                if x is not None and y is not None:
+                    self.values[self.signals[0]].append(x)
+                    self.values[self.signals[1]].append(y)
             now = asyncio.get_event_loop().time()
-
             if now - self.last_draw < self.refresh_period:
                 continue
-
             self.last_draw = now
             self.update()
 
     def update(self):
         if self.mode == "line":
-
+            latest_time = None
             for line, signal in zip(self.lines, self.signals):
                 points = self.values[signal]
-
-                if points:
-                    x, y = zip(*points)
-                    line.set_data(x, y)
-
-            self.ax.relim()
-            self.ax.autoscale_view()
-
+                if not points:
+                    continue
+                arr = np.asarray(points, dtype=np.float64)
+                line.setData(arr[:, 0], arr[:, 1])
+                latest_time = arr[-1, 0]
+            if latest_time is not None:
+                self.plot.setXRange(
+                    max(0, latest_time - self.time_window), latest_time, padding=0
+                )
         else:
-            x = self.values[self.signals[0]]
-            y = self.values[self.signals[1]]
-
-            self.artist.set_offsets(list(zip(x, y)))
-
-        self.fig.canvas.draw_idle()
-        self.fig.canvas.flush_events()
+            x = np.asarray(self.values[self.signals[0]], dtype=np.float64)
+            y = np.asarray(self.values[self.signals[1]], dtype=np.float64)
+            if len(x):
+                self.scatter.setData(x, y)
 
 
 class Recorder:
@@ -237,4 +255,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    app = QApplication(sys.argv)
+
+    loop = QEventLoop(app)
+    asyncio.set_event_loop(loop)
+
+    with loop:
+        loop.run_until_complete(main())
