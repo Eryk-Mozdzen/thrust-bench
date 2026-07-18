@@ -1,6 +1,7 @@
 // TODO: handle fragmented messages
 // TODO: handle payload length 7+16
 // TODO: handle payload length 7+64
+// TODO: handle close handshake
 
 #include <stddef.h>
 #include <string.h>
@@ -15,12 +16,12 @@
 #include "websocket.h"
 
 typedef enum {
-    OPCODE_CONTINUATION_FRAME = 0,
-    OPCODE_NON_CONTROL_FRAME_TEXT = 1,
-    OPCODE_NON_CONTROL_FRAME_BINARY = 2,
-    OPCODE_CONTROL_FRAME_CLOSE = 8,
-    OPCODE_CONTROL_FRAME_PING = 9,
-    OPCODE_CONTROL_FRAME_PONG = 10,
+    OPCODE_CONTINUATION = 0,
+    OPCODE_TEXT = 1,
+    OPCODE_BINARY = 2,
+    OPCODE_CLOSE = 8,
+    OPCODE_PING = 9,
+    OPCODE_PONG = 10,
 } opcode_t;
 
 static u32_t base64_encode(char *dest, const u8_t *input, const u32_t input_length) {
@@ -55,6 +56,15 @@ static u32_t base64_encode(char *dest, const u8_t *input, const u32_t input_leng
     return dest_length;
 }
 
+static void payload_unmask(u8_t *output,
+                           const u8_t *input,
+                           const u32_t input_length,
+                           const u8_t masking_key[4]) {
+    for(u32_t i = 0; i < input_length; i++) {
+        output[i] = input[i] ^ masking_key[i % 4];
+    }
+}
+
 static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
     struct websocket_client *client = arg;
     websocket_server_t *wss = client->server;
@@ -68,13 +78,13 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
 
     tcp_recved(pcb, p->tot_len);
 
-    const char *data = p->payload;
+    const u8_t *data = p->payload;
 
     switch(client->state) {
         case WEBSOCKET_STATE_CONNECTING: {
             char key[24] = {0};
 
-            const char *token = data;
+            const char *token = (const char *)data;
             const char *newline = NULL;
             do {
                 newline = strchr(token, '\n');
@@ -124,31 +134,44 @@ static err_t websocket_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
             const u8_t masked = (data[1] & 0x80);
             const u8_t payload_len = (data[1] & 0x7F);
 
-            if((opcode != OPCODE_NON_CONTROL_FRAME_BINARY) &&
-               (opcode != OPCODE_NON_CONTROL_FRAME_TEXT)) {
-                break;
-            }
+            switch(opcode) {
+                case OPCODE_CONTINUATION: {
 
-            if((payload_len == 126) || (payload_len == 127)) {
-                break;
-            }
+                } break;
+                case OPCODE_TEXT:
+                case OPCODE_BINARY: {
+                    if(payload_len <= 125) {
+                        if(masked) {
+                            payload_unmask(payload, &data[6], payload_len, &data[2]);
+                        } else {
+                            memcpy(payload, &data[2], payload_len);
+                        }
 
-            if(masked) {
-                const u8_t masking_key[4] = {
-                    data[2],
-                    data[3],
-                    data[4],
-                    data[5],
-                };
-                for(u8_t i = 0; i < payload_len; i++) {
-                    payload[i] = data[6 + i] ^ masking_key[i % 4];
-                }
-            } else {
-                memcpy(payload, &data[2], payload_len);
-            }
+                        if(wss->on_message != NULL) {
+                            wss->on_message(wss->arg, client, payload, payload_len);
+                        }
+                    }
+                } break;
+                case OPCODE_CLOSE: {
 
-            if(wss->on_message != NULL) {
-                wss->on_message(wss->arg, client, payload, payload_len);
+                } break;
+                case OPCODE_PING: {
+                    if(payload_len <= 125) {
+                        u8_t frame[256];
+                        frame[0] = 0x80 | ((OPCODE_PONG << 0) & 0x0F);
+                        frame[1] = ((payload_len << 0) & 0x7F);
+                        if(masked) {
+                            payload_unmask(&frame[2], &data[6], payload_len, &data[2]);
+                        } else {
+                            memcpy(&frame[2], &data[2], payload_len);
+                        }
+                        tcp_write(client->pcb, frame, 2 + payload_len, TCP_WRITE_FLAG_COPY);
+                        tcp_output(client->pcb);
+                    }
+                } break;
+                case OPCODE_PONG: {
+
+                } break;
             }
         } break;
         case WEBSOCKET_STATE_CLOSING: {
@@ -250,23 +273,18 @@ err_t websocket_send(struct websocket_client *client, const void *message, u32_t
         return ERR_CONN;
     }
 
-    u8_t frame[256] = {0};
-
-    const u32_t header_len = 2;
-
     if(message_len > 125) {
         message_len = 125;
     }
 
-    frame[0] |= (0x01 << 7);
-    frame[0] |= (OPCODE_NON_CONTROL_FRAME_BINARY << 0);
-    frame[1] |= (message_len << 0);
-
-    memcpy(frame + header_len, message, message_len);
+    u8_t frame[256];
+    frame[0] = 0x80 | ((OPCODE_BINARY << 0) & 0x0F);
+    frame[1] = ((message_len << 0) & 0x7F);
+    memcpy(&frame[2], message, message_len);
 
     err_t err;
 
-    err = tcp_write(client->pcb, frame, header_len + message_len, TCP_WRITE_FLAG_COPY);
+    err = tcp_write(client->pcb, frame, 2 + message_len, TCP_WRITE_FLAG_COPY);
     if(err != ERR_OK) {
         return err;
     }

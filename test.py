@@ -148,7 +148,7 @@ class Bench:
         self.ws = None
 
     async def __aenter__(self):
-        self.ws = await websockets.connect(self.url, ping_interval=None)
+        self.ws = await websockets.connect(self.url)
         await self.ws.send("offset")
         return self
 
