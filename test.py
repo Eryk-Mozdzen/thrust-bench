@@ -4,6 +4,7 @@
 # dependencies = [
 #     "asyncio",
 #     "aiomqtt",
+#     "websockets",
 #     "msgpack",
 #     "datetime",
 #     "PyQt6",
@@ -14,6 +15,7 @@
 
 import asyncio
 import aiomqtt
+import websockets
 import msgpack
 import struct
 import datetime
@@ -37,6 +39,7 @@ class Bus:
             "true_current": None,
             "focus_voltage": None,
             "focus_velocity": None,
+            "setpoint_torque": None,
         }
         self.subscribers = []
 
@@ -58,37 +61,108 @@ class Bus:
             await q.put(message)
 
 
-class Focus:
+class Experiment:
     def __init__(self):
-        pass
+        self.value = 0
+        self.value_max = 0.03
+        self.step_value = 0.001
+        self.step_duration = 1
+
+    async def run(self, queue, focus):
+        while True:
+            if self.value > self.value_max:
+                return
+
+            self.value += self.step_value
+
+            await focus.set(self.value)
+            await queue.put(
+                (
+                    datetime.datetime.now(datetime.UTC),
+                    {
+                        "setpoint_torque": self.value,
+                    },
+                )
+            )
+            await asyncio.sleep(self.step_duration)
+
+
+class Focus:
+    def __init__(self, ip, port):
+        self.ip = ip
+        self.port = port
+
+    async def __aenter__(self):
+        self.reader, self.writer = await asyncio.open_connection(self.ip, self.port)
+
+        print((await self.reader.readline()).decode().strip())
+        print((await self.reader.readline()).decode().strip())
+        print((await self.reader.readline()).decode().strip())
+
+        await self.send("calib_full")
+        await asyncio.sleep(10)
+
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.set(0)
+        await self.send("stop")
+        self.writer.close()
+        await self.writer.wait_closed()
 
     async def run(self, queue):
-        async with aiomqtt.Client("localhost") as client:
-            await client.subscribe("focus/state")
-            async for message in client.messages:
-                state = msgpack.unpackb(message.payload)
+        try:
+            async with aiomqtt.Client("localhost") as client:
+                await client.subscribe("focus/state")
+                async for message in client.messages:
+                    state = msgpack.unpackb(message.payload)
 
-                await queue.put(
-                    (
-                        datetime.datetime.now(datetime.UTC),
-                        {
-                            "focus_voltage": state["supply"],
-                            "focus_velocity": state["velocity"],
-                        },
+                    await queue.put(
+                        (
+                            datetime.datetime.now(datetime.UTC),
+                            {
+                                "focus_voltage": state["supply"],
+                                "focus_velocity": state["velocity"],
+                            },
+                        )
                     )
-                )
+        except asyncio.CancelledError:
+            raise
+
+    async def send(self, command, ignore_lines=0):
+        message = f"{command}\r\n"
+        self.writer.write(message.encode("utf-8"))
+        await self.writer.drain()
+
+        for _ in range(ignore_lines):
+            print((await self.reader.readline()).decode().strip())
+        print((await self.reader.readline()).decode().strip())
+
+    async def set(self, setpoint_torque):
+        await self.send(f"tr {setpoint_torque}\r\n", 1)
 
 
 class Bench:
-    def __init__(self):
-        pass
+    def __init__(self, url):
+        self.url = url
+        self.ws = None
+
+    async def __aenter__(self):
+        self.ws = await websockets.connect(self.url, ping_interval=None)
+        await self.ws.send("offset")
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        # await self.ws.close()
+        self.ws.transport.close()
 
     async def run(self, queue):
-        async with aiomqtt.Client("localhost") as client:
-            await client.subscribe("data")
-            async for message in client.messages:
+        try:
+            while True:
+                message = await self.ws.recv()
+
                 thrust, torque, velocity, temperature, voltage, current = struct.unpack(
-                    "<6f", message.payload
+                    "<6f", message
                 )
 
                 await queue.put(
@@ -104,6 +178,8 @@ class Bench:
                         },
                     )
                 )
+        except asyncio.CancelledError:
+            raise
 
 
 class Plotter:
@@ -165,25 +241,28 @@ class Plotter:
         return float(timestamp)
 
     async def run(self, queue):
-        while True:
-            timestamp, data = await queue.get()
-            if self.mode == "line":
-                t = self._timestamp_to_float(timestamp)
-                for signal in self.signals:
-                    value = data.get(signal)
-                    if value is not None:
-                        self.values[signal].append((t, value))
-            else:
-                x = data.get(self.signals[0])
-                y = data.get(self.signals[1])
-                if x is not None and y is not None:
-                    self.values[self.signals[0]].append(x)
-                    self.values[self.signals[1]].append(y)
-            now = asyncio.get_event_loop().time()
-            if now - self.last_draw < self.refresh_period:
-                continue
-            self.last_draw = now
-            self.update()
+        try:
+            while True:
+                timestamp, data = await queue.get()
+                if self.mode == "line":
+                    t = self._timestamp_to_float(timestamp)
+                    for signal in self.signals:
+                        value = data.get(signal)
+                        if value is not None:
+                            self.values[signal].append((t, value))
+                else:
+                    x = data.get(self.signals[0])
+                    y = data.get(self.signals[1])
+                    if x is not None and y is not None:
+                        self.values[self.signals[0]].append(x)
+                        self.values[self.signals[1]].append(y)
+                now = asyncio.get_event_loop().time()
+                if now - self.last_draw < self.refresh_period:
+                    continue
+                self.last_draw = now
+                self.update()
+        except asyncio.CancelledError:
+            raise
 
     def update(self):
         if self.mode == "line":
@@ -212,46 +291,58 @@ class Recorder:
         self.file = open(filepath, "w")
 
     async def run(self, queue):
-        header = True
+        try:
+            header = True
 
-        while True:
-            timestamp, data = await queue.get()
+            while True:
+                timestamp, data = await queue.get()
 
-            if header:
-                header = False
-                self.file.write("timestamp,")
-                for key in data.keys():
-                    self.file.write(f"{key},")
+                if header:
+                    header = False
+                    self.file.write("timestamp,")
+                    for key in data.keys():
+                        self.file.write(f"{key},")
+                    self.file.write("\n")
+
+                self.file.write(f"{timestamp},")
+                for _, value in data.items():
+                    self.file.write(f"{value},")
                 self.file.write("\n")
 
-            self.file.write(f"{timestamp},")
-            for _, value in data.items():
-                self.file.write(f"{value},")
-            self.file.write("\n")
-
-            self.file.flush()
+                self.file.flush()
+        except asyncio.CancelledError:
+            self.file.close()
+            raise
 
 
 async def main():
-    bus = Bus()
+    async with (
+        Focus("192.168.8.1", 23) as focus,
+        Bench("ws://192.168.7.2:81/data") as bench,
+    ):
+        bus = Bus()
 
-    focus = Focus()
-    bench = Bench()
-    plotter1 = Plotter(["true_velocity", "focus_velocity"])
-    plotter2 = Plotter(["true_torque"])
-    plotter3 = Plotter(("true_velocity", "true_thrust"))
-    plotter4 = Plotter(("true_velocity", "true_torque"))
-    recorder = Recorder()
+        experiment = Experiment()
+        plotter1 = Plotter(["true_velocity", "focus_velocity"])
+        plotter2 = Plotter(["setpoint_torque", "true_torque"])
+        plotter3 = Plotter(("true_velocity", "true_thrust"))
+        plotter4 = Plotter(("true_velocity", "true_torque"))
+        recorder = Recorder()
 
-    await asyncio.gather(
-        focus.run(bus),
-        bench.run(bus),
-        plotter1.run(bus.subscribe()),
-        plotter2.run(bus.subscribe()),
-        plotter3.run(bus.subscribe()),
-        plotter4.run(bus.subscribe()),
-        recorder.run(bus.subscribe()),
-    )
+        tasks = [
+            asyncio.create_task(experiment.run(bus, focus)),
+            asyncio.create_task(focus.run(bus)),
+            asyncio.create_task(bench.run(bus)),
+            asyncio.create_task(plotter1.run(bus.subscribe())),
+            asyncio.create_task(plotter2.run(bus.subscribe())),
+            asyncio.create_task(plotter3.run(bus.subscribe())),
+            asyncio.create_task(plotter4.run(bus.subscribe())),
+            asyncio.create_task(recorder.run(bus.subscribe())),
+        ]
+
+        await tasks[0]
+        for task in tasks:
+            task.cancel()
 
 
 if __name__ == "__main__":

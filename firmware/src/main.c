@@ -5,7 +5,6 @@
 #include <lwip/apps/fs.h>
 #include <lwip/apps/httpd.h>
 #include <lwip/apps/lwiperf.h>
-#include <lwip/apps/mqtt.h>
 #include <lwip/init.h>
 #include <lwip/sys.h>
 #include <lwip/timeouts.h>
@@ -25,7 +24,6 @@ typedef enum {
     STATE_DISCONNECTED,
     STATE_CONNECTING,
     STATE_CONNECTED,
-    STATE_WAITING_MQTT,
     STATE_LOOP,
 } state_t;
 
@@ -116,14 +114,6 @@ static uint32_t ppp_output_cb(ppp_pcb *pcb, const void *data, uint32_t data_size
     context_t *context = ctx;
 
     return fifo_write(&context->fifo_tx, data, data_size);
-}
-
-static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
-    context_t *context = arg;
-
-    if(status == MQTT_CONNECT_ACCEPTED) {
-        context->state = STATE_LOOP;
-    }
 }
 
 static void ws_on_message_cb(void *arg,
@@ -492,7 +482,6 @@ int main() {
     ppp_pcb *ppp = pppos_create(&netif, ppp_output_cb, ppp_link_status_cb, &context);
     ppp_set_default(ppp);
 
-    mqtt_client_t *mqtt_client = NULL;
     websocket_server_t *ws_server = NULL;
 
     context.state = STATE_DISCONNECTED;
@@ -544,25 +533,6 @@ int main() {
 
             } break;
             case STATE_CONNECTED: {
-                ip4_addr_t mqtt_broker;
-                IP4_ADDR(&mqtt_broker, 192, 168, 7, 1);
-
-                const struct mqtt_connect_client_info_t mqtt_client_info = {
-                    .client_id = "lwip_client",
-                    .client_user = NULL,
-                    .client_pass = NULL,
-                    .keep_alive = 60,
-                    .will_topic = NULL,
-                    .will_msg = NULL,
-                    .will_msg_len = 0,
-                    .will_qos = 0,
-                    .will_retain = 0,
-                };
-
-                mqtt_client = mqtt_client_new();
-                mqtt_client_connect(mqtt_client, &mqtt_broker, 1883, mqtt_connection_cb, &context,
-                                    &mqtt_client_info);
-
                 lwiperf_start_tcp_server_default(NULL, NULL);
 
                 httpd_init();
@@ -571,10 +541,7 @@ int main() {
                 websocket_arg(ws_server, &context);
                 websocket_on_message(ws_server, ws_on_message_cb);
 
-                context.state = STATE_WAITING_MQTT;
-            } break;
-            case STATE_WAITING_MQTT: {
-
+                context.state = STATE_LOOP;
             } break;
             case STATE_LOOP: {
                 if((timestamp - prev1) >= 100) {
@@ -583,8 +550,6 @@ int main() {
                     const float frame[6] = {
                         thrust, torque, velocity, temperature, voltage, current,
                     };
-
-                    mqtt_publish(mqtt_client, "data", frame, sizeof(frame), 0, 0, NULL, NULL);
 
                     for(struct websocket_client *client = ws_server->clients; client != NULL;
                         client = client->next) {
