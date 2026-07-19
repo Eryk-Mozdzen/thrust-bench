@@ -63,12 +63,15 @@ class Bus:
 
 class Experiment:
     def __init__(self):
-        self.value = 0
-        self.value_max = 0.1
+        self.value = 0.002
+        self.value_max = 0.08
         self.step_value = 0.001
         self.step_duration = 1
 
     async def run(self, queue, focus):
+        await focus.set(self.value)
+        await asyncio.sleep(3)
+
         while True:
             if self.value > self.value_max:
                 return

@@ -15,7 +15,7 @@ import scipy
 import matplotlib.pyplot as plt
 import sys
 
-df = pd.read_csv(sys.argv[1]).dropna(how="all", axis="columns").dropna()
+df = pd.read_csv(sys.argv[1]).dropna()
 
 w = np.linspace(0, max(df["true_velocity"]), 100)
 
@@ -54,9 +54,23 @@ plt.grid()
 plt.legend()
 
 plt.figure()
-plt.scatter(df["true_velocity"], 100 * df["efficiency"], label="efficiency", s=1)
+plt.scatter(df["true_velocity"], 100 * df["efficiency"], c="black", s=1)
 plt.xlabel("angular velocity [rad/s]")
 plt.ylabel("efficiency [%]")
+plt.grid()
+
+params, _ = scipy.optimize.curve_fit(
+    lambda x, a, b: (a * x) + b, df["setpoint_torque"], df["true_torque"]
+)
+a, b = params
+x = np.linspace(0, max(df["setpoint_torque"]), 100)
+print(a, b)
+
+plt.figure()
+plt.scatter(df["setpoint_torque"], df["true_torque"], label="samples", c="black", s=1)
+plt.plot(x, (a * x) + b, label="model", c="red")
+plt.xlabel("setpoint torque [Nm]")
+plt.ylabel("true torque [Nm]")
 plt.grid()
 plt.legend()
 
