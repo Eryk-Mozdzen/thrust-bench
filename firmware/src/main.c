@@ -136,6 +136,55 @@ static void delay_us(const uint32_t time_us) {
     }
 }
 
+#define TACHO_BUFFER 20
+
+typedef struct {
+    uint32_t rotations;
+    uint32_t timestamp;
+} tacho_sample_t;
+
+typedef struct {
+    tacho_sample_t samples[TACHO_BUFFER];
+    uint32_t counter;
+    uint32_t timestamp_last;
+} tacho_t;
+
+static void tacho_init(tacho_t *tacho) {
+    for(uint32_t i = 0; i < TACHO_BUFFER; i++) {
+        tacho->samples[i].rotations = 0;
+        tacho->samples[i].timestamp = HAL_GetTick();
+    }
+    tacho->counter = 0;
+    tacho->timestamp_last = HAL_GetTick();
+
+    HAL_TIM_Base_Start(&htim2);
+    __HAL_TIM_SET_COUNTER(&htim2, 0);
+}
+
+static void tacho_read(tacho_t *tacho, float *velocity) {
+    const uint32_t timestamp = HAL_GetTick();
+
+    if((timestamp - tacho->timestamp_last) >= 100) {
+        tacho->timestamp_last = timestamp;
+
+        const tacho_sample_t past = tacho->samples[tacho->counter];
+
+        tacho->samples[tacho->counter].rotations = __HAL_TIM_GET_COUNTER(&htim2);
+        tacho->samples[tacho->counter].timestamp = timestamp;
+
+        const float two_pi = 6.283185307f;
+        const float dr = (tacho->samples[tacho->counter].rotations - past.rotations);
+        const float dt = 0.001f * (tacho->samples[tacho->counter].timestamp - past.timestamp);
+
+        *velocity = two_pi * dr / dt;
+
+        tacho->counter++;
+        if(tacho->counter >= TACHO_BUFFER) {
+            tacho->counter = 0;
+        }
+    }
+}
+
 typedef enum {
     HX711_STATE_IDLE,
     HX711_STATE_SYNC,
@@ -490,8 +539,9 @@ int main() {
     HAL_UART_Receive_IT(&huart2, (uint8_t *)&recv_byte, 1);
 
     HAL_TIM_Base_Start(&htim1);
-    HAL_TIM_Base_Start(&htim2);
-    __HAL_TIM_SET_COUNTER(&htim2, 0);
+
+    tacho_t tacho;
+    tacho_init(&tacho);
 
     hx711_t hx711;
     hx711_init(&hx711);
@@ -504,7 +554,6 @@ int main() {
 
     uint32_t prev1 = 0;
     uint32_t prev2 = 0;
-    uint32_t prev3 = 0;
     uint8_t send_buffer[1024];
     uint8_t recv_buffer[1024];
 
@@ -571,14 +620,7 @@ int main() {
             } break;
         }
 
-        if((timestamp - prev2) >= 100) {
-            const uint32_t rotations = __HAL_TIM_GET_COUNTER(&htim2);
-            const float delta = 0.001f * (timestamp - prev2);
-            const float k = 0.1f;
-            velocity = ((1.f - k) * velocity) + (k * 6.283185307f * rotations / delta);
-            prev2 = timestamp;
-            __HAL_TIM_SET_COUNTER(&htim2, 0);
-        }
+        tacho_read(&tacho, &velocity);
 
         if(hx711_read(&hx711, load_raw)) {
             const int32_t load[3] = {
@@ -596,8 +638,8 @@ int main() {
             torque = 0.5f * (load[1] + load[2]) * k2 * arm * g;
         }
 
-        if((timestamp - prev3) >= 50) {
-            prev3 = timestamp;
+        if((timestamp - prev2) >= 50) {
+            prev2 = timestamp;
             ina226_read(&ina226, &voltage, &current);
             ds18b20_read(&ds18b20, &temperature);
         }
