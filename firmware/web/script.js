@@ -13,8 +13,8 @@ ws.onmessage = (event) => {
     document.getElementById("torque").textContent = view.getFloat32(4, true).toFixed(5)
     document.getElementById("velocity").textContent = view.getFloat32(8, true).toFixed(0)
     document.getElementById("temperature").textContent = view.getFloat32(12, true).toFixed(1)
-    document.getElementById("voltage").textContent = view.getFloat32(16, true).toFixed(1)
-    document.getElementById("current").textContent = view.getFloat32(20, true).toFixed(1)
+    document.getElementById("voltage").textContent = view.getFloat32(16, true).toFixed(2)
+    document.getElementById("current").textContent = view.getFloat32(20, true).toFixed(2)
 }
 
 function sendCommand(cmd) {
