@@ -53,9 +53,9 @@ print(f"kf = {kf:e}")
 print(f"kt = {kt:e}")
 
 F_target = 20
-print(f"F     target = {F_target} N")
-print(f"w     target = {np.sqrt(F_target / kf)} rad/s")
-print(f"Pmech target = {kt * (F_target / kf) ** 1.5} W")
+print(f"    F target = {F_target} N")
+print(f"    w target = {np.sqrt(F_target / kf):.0f} rad/s")
+print(f"Pmech target = {np.abs(kt * (F_target / kf) ** 1.5):.0f} W")
 
 plt.figure()
 plt.plot(w, kf * (w**2), label="model", c="red")
