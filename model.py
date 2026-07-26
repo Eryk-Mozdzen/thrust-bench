@@ -109,8 +109,8 @@ plt.ylim(ylim)
 plt.grid()
 plt.legend()
 
-df["power_electrical"] = df["true_voltage"] * df["true_current"]
-df["power_mechanical"] = df["true_torque"] * df["true_velocity"]
+df["power_electrical"] = df["true_voltage"].abs() * df["true_current"].abs()
+df["power_mechanical"] = df["true_torque"].abs() * df["true_velocity"].abs()
 df["efficiency"] = df["power_mechanical"] / df["power_electrical"]
 
 eff_poly, _, eff_keep = curve_fit(
@@ -162,7 +162,7 @@ plt.legend()
 [torque_drag], _, torque_keep = curve_fit(
     lambda x, b: x + b, df["setpoint_torque"], df["true_torque"]
 )
-torque = np.linspace(0, max(df["setpoint_torque"]), 100)
+torque = np.linspace(df["setpoint_torque"].min(), df["setpoint_torque"].max(), 100)
 
 plt.figure()
 plt.plot(torque, torque + torque_drag, label="model", c="red")

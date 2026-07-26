@@ -73,7 +73,7 @@ class Experiment:
         await asyncio.sleep(3)
 
         while True:
-            if self.value > self.value_max:
+            if np.abs(self.value) > np.abs(self.value_max):
                 return
 
             self.value += self.step_value
