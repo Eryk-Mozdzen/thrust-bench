@@ -52,10 +52,10 @@ w = np.linspace(0, max(df["true_velocity"]), 100)
 print(f"kf = {kf:e}")
 print(f"kt = {kt:e}")
 
-F_target = 20
-print(f"    F target = {F_target} N")
-print(f"    w target = {np.sqrt(F_target / kf):.0f} rad/s")
-print(f"Pmech target = {np.abs(kt * (F_target / kf) ** 1.5):.0f} W")
+for f_target in [5, 10, 15, 20]:
+    print(
+        f"{f_target:5.0f} N | {np.sqrt(f_target / kf):5.0f} rad/s | {np.abs(kt * (f_target / kf) ** 1.5):5.0f} W"
+    )
 
 plt.figure()
 plt.plot(w, kf * (w**2), label="model", c="red")
