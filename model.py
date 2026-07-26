@@ -42,15 +42,20 @@ df = pd.read_csv(sys.argv[1]).dropna()
 
 w = np.linspace(0, max(df["true_velocity"]), 100)
 
-kf, _, kf_keep = curve_fit(
+[kf], _, kf_keep = curve_fit(
     lambda w, k: k * (w**2), df["true_velocity"], df["true_thrust"]
 )
-kt, _, kt_keep = curve_fit(
+[kt], _, kt_keep = curve_fit(
     lambda w, k: k * (w**2), df["true_velocity"], df["true_torque"]
 )
 
-print(f"kf = {kf[0]:e}")
-print(f"kt = {kt[0]:e}")
+print(f"kf = {kf:e}")
+print(f"kt = {kt:e}")
+
+F_target = 20
+print(f"F     target = {F_target} N")
+print(f"w     target = {np.sqrt(F_target / kf)} rad/s")
+print(f"Pmech target = {kt * (F_target / kf) ** 1.5} W")
 
 plt.figure()
 plt.plot(w, kf * (w**2), label="model", c="red")
@@ -108,26 +113,59 @@ df["power_electrical"] = df["true_voltage"] * df["true_current"]
 df["power_mechanical"] = df["true_torque"] * df["true_velocity"]
 df["efficiency"] = df["power_mechanical"] / df["power_electrical"]
 
-print(
-    f"peak efficiency {100*max(df["efficiency"]):.0f}% for {df.loc[df["efficiency"].idxmax(), "true_velocity"]:.0f} rad/s"
+eff_poly, _, eff_keep = curve_fit(
+    lambda x, p1, p2, p3: x * np.poly1d([p1, p2, p3])(x),
+    df["true_velocity"],
+    df["efficiency"],
+)
+eff_poly = np.poly1d([*eff_poly, 0])
+
+eff_max_w = (
+    eff_poly.deriv()
+    .roots[
+        np.isreal(eff_poly.deriv().roots)
+        & (eff_poly.deriv(2)(eff_poly.deriv().roots).real < 0)
+    ]
+    .real
 )
 
 plt.figure()
-plt.scatter(df["true_velocity"], 100 * df["efficiency"], c="black", s=1)
+plt.plot(w, 100 * eff_poly(w), c="red", label="model")
+for ww in eff_max_w:
+    print(f"peak efficiency {100*eff_poly(ww):.0f}% for {ww:.0f} rad/s")
+    plt.axvline(x=ww, color="red", linestyle="dashed")
+    plt.axhline(y=100 * eff_poly(ww), color="red", linestyle="dashed", label="peak")
+plt.scatter(
+    df["true_velocity"].iloc[eff_keep],
+    100 * df["efficiency"].iloc[eff_keep],
+    label="samples ok",
+    c="black",
+    s=1,
+)
+plt.autoscale()
+xlim = plt.xlim()
+ylim = plt.ylim()
+plt.scatter(
+    df["true_velocity"].iloc[~eff_keep],
+    100 * df["efficiency"].iloc[~eff_keep],
+    label="samples rejected",
+    c="red",
+    s=4,
+)
 plt.xlabel("angular velocity [rad/s]")
 plt.ylabel("efficiency [%]")
-plt.ylim(0, 100 * df["efficiency"].max())
+plt.xlim(xlim)
+plt.ylim(ylim)
 plt.grid()
+plt.legend()
 
-torque_line, _, torque_keep = curve_fit(
-    lambda x, a, b: (a * x) + b, df["setpoint_torque"], df["true_torque"]
+[torque_drag], _, torque_keep = curve_fit(
+    lambda x, b: x + b, df["setpoint_torque"], df["true_torque"]
 )
-a, b = torque_line
-x = np.linspace(0, max(df["setpoint_torque"]), 100)
-print(a, b)
+torque = np.linspace(0, max(df["setpoint_torque"]), 100)
 
 plt.figure()
-plt.plot(x, (a * x) + b, label="model", c="red")
+plt.plot(torque, torque + torque_drag, label="model", c="red")
 plt.scatter(
     df["setpoint_torque"].iloc[torque_keep],
     df["true_torque"].iloc[torque_keep],
