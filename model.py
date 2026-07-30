@@ -77,7 +77,7 @@ plt.scatter(
     s=4,
 )
 plt.xlabel("angular velocity [rad/s]")
-plt.ylabel("thrust [N]")
+plt.ylabel("propeller thrust [N]")
 plt.xlim(xlim)
 plt.ylim(ylim)
 plt.grid()
@@ -103,20 +103,28 @@ plt.scatter(
     s=4,
 )
 plt.xlabel("angular velocity [rad/s]")
-plt.ylabel("torque [Nm]")
+plt.ylabel("propeller torque [Nm]")
 plt.xlim(xlim)
 plt.ylim(ylim)
 plt.grid()
 plt.legend()
 
+air_density = 1.2041  # TODO: calculate from temperature
+rotor_radius = (0.5 * float(sys.argv[2])) * 0.0254
+rotor_field = np.pi * (rotor_radius**2)
+
 df["power_electrical"] = df["true_voltage"].abs() * df["true_current"].abs()
 df["power_mechanical"] = df["true_torque"].abs() * df["true_velocity"].abs()
-df["efficiency"] = df["power_mechanical"] / df["power_electrical"]
+df["power_induced"] = df["true_thrust"].abs() * np.sqrt(
+    df["true_thrust"].abs() / (2 * air_density * rotor_field)
+)
+df["drive_efficiency"] = df["power_mechanical"] / df["power_electrical"]
+df["propeller_efficiency"] = df["power_induced"] / df["power_mechanical"]
 
 eff_poly, _, eff_keep = curve_fit(
     lambda x, p1, p2, p3: x * np.poly1d([p1, p2, p3])(x),
     df["true_velocity"],
-    df["efficiency"],
+    df["drive_efficiency"],
 )
 eff_poly = np.poly1d([*eff_poly, 0])
 
@@ -132,30 +140,56 @@ eff_max_w = (
 plt.figure()
 plt.plot(w, 100 * eff_poly(w), c="red", label="model")
 for ww in eff_max_w:
-    print(f"peak efficiency {100*eff_poly(ww):.0f}% for {ww:.0f} rad/s")
+    print(f"    drive efficiency {100*eff_poly(ww):.0f}% (peak) for {ww:.0f} rad/s")
     plt.axvline(x=ww, color="red", linestyle="dashed")
     plt.axhline(y=100 * eff_poly(ww), color="red", linestyle="dashed", label="peak")
 plt.scatter(
     df["true_velocity"].iloc[eff_keep],
-    100 * df["efficiency"].iloc[eff_keep],
+    100 * df["drive_efficiency"].iloc[eff_keep],
     label="samples ok",
     c="black",
     s=1,
 )
-plt.autoscale()
-xlim = plt.xlim()
-ylim = plt.ylim()
 plt.scatter(
     df["true_velocity"].iloc[~eff_keep],
-    100 * df["efficiency"].iloc[~eff_keep],
+    100 * df["drive_efficiency"].iloc[~eff_keep],
     label="samples rejected",
     c="red",
     s=4,
 )
 plt.xlabel("angular velocity [rad/s]")
-plt.ylabel("efficiency [%]")
-plt.xlim(xlim)
-plt.ylim(ylim)
+plt.ylabel("drive efficiency [%]")
+plt.xlim([0, None])
+plt.ylim([0, 100])
+plt.grid()
+plt.legend()
+
+[eff], _, eff_keep = curve_fit(
+    lambda x, eta: eta,
+    df["true_velocity"],
+    df["propeller_efficiency"],
+)
+print(f"propeller efficiency {100*eff:.0f}%")
+plt.figure()
+plt.plot(w, 100 * eff * np.ones_like(w), c="red", label="model")
+plt.scatter(
+    df["true_velocity"].iloc[eff_keep],
+    100 * df["propeller_efficiency"].iloc[eff_keep],
+    label="samples ok",
+    c="black",
+    s=1,
+)
+plt.scatter(
+    df["true_velocity"].iloc[~eff_keep],
+    100 * df["propeller_efficiency"].iloc[~eff_keep],
+    label="samples rejected",
+    c="red",
+    s=4,
+)
+plt.xlabel("angular velocity [rad/s]")
+plt.ylabel("propeller efficiency [%]")
+plt.xlim([0, None])
+plt.ylim([0, 100])
 plt.grid()
 plt.legend()
 
