@@ -109,7 +109,7 @@ plt.ylim(ylim)
 plt.grid()
 plt.legend()
 
-air_density = 1.2041  # TODO: calculate from temperature
+air_density = 1.1839  # TODO: calculate from temperature
 rotor_radius = (0.5 * float(sys.argv[2])) * 0.0254
 rotor_field = np.pi * (rotor_radius**2)
 
@@ -121,43 +121,48 @@ df["power_induced"] = df["true_thrust"].abs() * np.sqrt(
 df["drive_efficiency"] = df["power_mechanical"] / df["power_electrical"]
 df["propeller_efficiency"] = df["power_induced"] / df["power_mechanical"]
 
-eff_poly, _, eff_keep = curve_fit(
-    lambda x, p1, p2, p3: x * np.poly1d([p1, p2, p3])(x),
-    df["true_velocity"],
+
+def drive_eff_model(torque, a, b, c):
+    return (a * torque) / ((a * torque) + b + (c * (torque**2)))
+
+
+eff_param, _, eff_keep = curve_fit(
+    drive_eff_model,
+    df["true_torque"].abs(),
     df["drive_efficiency"],
 )
-eff_poly = np.poly1d([*eff_poly, 0])
+eff_max_tt = np.sqrt(eff_param[1] / eff_param[2])
 
-eff_max_w = (
-    eff_poly.deriv()
-    .roots[
-        np.isreal(eff_poly.deriv().roots)
-        & (eff_poly.deriv(2)(eff_poly.deriv().roots).real < 0)
-    ]
-    .real
+print(
+    f"    drive efficiency {100*drive_eff_model(eff_max_tt, *eff_param):.0f}% (peak) for {eff_max_tt:.5f} Nm"
 )
 
+t = np.linspace(0, max(df["true_torque"].abs().max(), eff_max_tt), 100)
+
 plt.figure()
-plt.plot(w, 100 * eff_poly(w), c="red", label="model")
-for ww in eff_max_w:
-    print(f"    drive efficiency {100*eff_poly(ww):.0f}% (peak) for {ww:.0f} rad/s")
-    plt.axvline(x=ww, color="red", linestyle="dashed")
-    plt.axhline(y=100 * eff_poly(ww), color="red", linestyle="dashed", label="peak")
+plt.plot(t, 100 * drive_eff_model(t, *eff_param), c="red", label="model")
+plt.axvline(x=eff_max_tt, color="red", linestyle="dashed")
+plt.axhline(
+    y=100 * drive_eff_model(eff_max_tt, *eff_param),
+    color="red",
+    linestyle="dashed",
+    label="peak",
+)
 plt.scatter(
-    df["true_velocity"].iloc[eff_keep],
+    df["true_torque"].iloc[eff_keep].abs(),
     100 * df["drive_efficiency"].iloc[eff_keep],
     label="samples ok",
     c="black",
     s=1,
 )
 plt.scatter(
-    df["true_velocity"].iloc[~eff_keep],
+    df["true_torque"].iloc[~eff_keep].abs(),
     100 * df["drive_efficiency"].iloc[~eff_keep],
     label="samples rejected",
     c="red",
     s=4,
 )
-plt.xlabel("angular velocity [rad/s]")
+plt.xlabel("torque [Nm]")
 plt.ylabel("drive efficiency [%]")
 plt.xlim([0, None])
 plt.ylim([0, 100])
