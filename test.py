@@ -3,9 +3,8 @@
 # /// script
 # dependencies = [
 #     "asyncio",
-#     "aiomqtt",
 #     "websockets",
-#     "msgpack",
+#     "cobs",
 #     "datetime",
 #     "PyQt6",
 #     "pyqtgraph",
@@ -14,9 +13,8 @@
 # ///
 
 import asyncio
-import aiomqtt
 import websockets
-import msgpack
+import cobs.cobs
 import struct
 import datetime
 import numpy as np
@@ -91,12 +89,12 @@ class Experiment:
 
 
 class Focus:
-    def __init__(self, ip, port):
+    def __init__(self, ip):
         self.ip = ip
-        self.port = port
 
     async def __aenter__(self):
-        self.reader, self.writer = await asyncio.open_connection(self.ip, self.port)
+        self.reader, self.writer = await asyncio.open_connection(self.ip, 23)
+        self.reader2, self.writer2 = await asyncio.open_connection(self.ip, 8200)
 
         print((await self.reader.readline()).decode().strip())
         print((await self.reader.readline()).decode().strip())
@@ -113,25 +111,38 @@ class Focus:
         await self.send("stop")
         self.writer.close()
         await self.writer.wait_closed()
+        self.writer2.close()
+        await self.writer2.wait_closed()
 
     async def run(self, queue):
-        try:
-            async with aiomqtt.Client("localhost") as client:
-                await client.subscribe("focus/state")
-                async for message in client.messages:
-                    state = msgpack.unpackb(message.payload)
+        buffer = bytearray()
 
-                    await queue.put(
-                        (
-                            datetime.datetime.now(datetime.UTC),
-                            {
-                                "focus_voltage": state["supply"],
-                                "focus_velocity": state["velocity"],
-                            },
-                        )
-                    )
-        except asyncio.CancelledError:
-            raise
+        while True:
+            data = await self.reader2.read(4096)
+            buffer.extend(data)
+            delimiter = buffer.find(0)
+            if delimiter < 0:
+                await asyncio.sleep(0.01)
+                continue
+            frame = buffer[:delimiter].copy()
+            del buffer[: delimiter + 1]
+            try:
+                decoded = cobs.cobs.decode(frame)
+            except Exception as e:
+                print(e)
+                continue
+            if len(decoded) != 9 * 4:
+                continue
+            values = struct.unpack("<9f", decoded)
+            await queue.put(
+                (
+                    datetime.datetime.now(datetime.UTC),
+                    {
+                        "focus_voltage": values[2],
+                        "focus_velocity": values[1],
+                    },
+                )
+            )
 
     async def send(self, command, ignore_lines=0):
         message = f"{command}\r\n"
@@ -320,7 +331,7 @@ class Recorder:
 
 async def main():
     async with (
-        Focus("192.168.8.1", 23) as focus,
+        Focus("192.168.8.1") as focus,
         Bench("ws://192.168.7.2:81/data") as bench,
     ):
         bus = Bus()
@@ -328,8 +339,6 @@ async def main():
         experiment = Experiment()
         plotter1 = Plotter(["true_velocity", "focus_velocity"])
         plotter2 = Plotter(["setpoint_torque", "true_torque"])
-        plotter3 = Plotter(("true_velocity", "true_thrust"))
-        plotter4 = Plotter(("true_velocity", "true_torque"))
         recorder = Recorder()
 
         tasks = [
@@ -338,8 +347,6 @@ async def main():
             asyncio.create_task(bench.run(bus)),
             asyncio.create_task(plotter1.run(bus.subscribe())),
             asyncio.create_task(plotter2.run(bus.subscribe())),
-            asyncio.create_task(plotter3.run(bus.subscribe())),
-            asyncio.create_task(plotter4.run(bus.subscribe())),
             asyncio.create_task(recorder.run(bus.subscribe())),
         ]
 
