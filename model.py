@@ -38,7 +38,7 @@ def curve_fit(model, x_data, y_data, **kwargs):
     return popt, pcov, keep
 
 
-df = pd.read_csv(sys.argv[1]).dropna()
+df = pd.read_csv(sys.argv[1], parse_dates=["timestamp"]).dropna()
 
 w = np.linspace(0, max(df["true_velocity"]), 100)
 
