@@ -52,11 +52,6 @@ w = np.linspace(0, max(df["true_velocity"]), 100)
 print(f"kf = {kf:e}")
 print(f"kt = {kt:e}")
 
-for f_target in [5, 10, 15, 20]:
-    print(
-        f"{f_target:5.0f} N | {np.sqrt(f_target / kf):5.0f} rad/s | {np.abs(kt * (f_target / kf) ** 1.5):5.0f} W"
-    )
-
 plt.figure()
 plt.plot(w, kf * (w**2), label="model", c="red")
 plt.scatter(
@@ -109,9 +104,17 @@ plt.ylim(ylim)
 plt.grid()
 plt.legend()
 
-air_density = 1.1839  # TODO: calculate from temperature
 rotor_radius = (0.5 * float(sys.argv[2])) * 0.0254
 rotor_field = np.pi * (rotor_radius**2)
+
+# TODO: measure pressure and humidity
+dry_air_gas_constant = 287.05
+air_pressure = 101325  # sea level
+air_temperature = df["true_temperature"].mean() + 273.15
+air_density = air_pressure / (dry_air_gas_constant * air_temperature)
+
+print(f"     air temperature {df["true_temperature"].mean():6.3f} deg C")
+print(f"         air density {air_density:6.3f} km/m^3")
 
 df["power_electrical"] = df["true_voltage"].abs() * df["true_current"].abs()
 df["power_mechanical"] = df["true_torque"].abs() * df["true_velocity"].abs()
@@ -231,5 +234,31 @@ plt.xlim(xlim)
 plt.ylim(ylim)
 plt.grid()
 plt.legend()
+
+prediction = pd.DataFrame({"desired thrust": [5, 10, 15, 20]})
+prediction["motor velocity"] = np.sqrt(prediction["desired thrust"] / kf)
+prediction["motor torque"] = (kt / kf) * prediction["desired thrust"]
+prediction["power mechanical"] = (
+    prediction["motor velocity"] * prediction["motor torque"]
+)
+prediction["drive efficiency"] = drive_eff_model(prediction["motor torque"], *eff_param)
+prediction["power electrical"] = (
+    prediction["power mechanical"] / prediction["drive efficiency"]
+)
+prediction["battery current"] = prediction["power electrical"] / 14.8
+print(
+    prediction.to_string(
+        formatters={
+            "desired thrust": lambda x: f"{x:.0f} N",
+            "motor velocity": lambda x: f"{x:.0f} rad/s",
+            "motor torque": lambda x: f"{x:.2f} Nm",
+            "power mechanical": lambda x: f"{x:.0f} W",
+            "drive efficiency": lambda x: f"{100*x:.0f}%",
+            "power electrical": lambda x: f"{x:.0f} W",
+            "battery current": lambda x: f"{x:.0f} A",
+        },
+        index=False,
+    )
+)
 
 plt.show()
