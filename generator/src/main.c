@@ -1,3 +1,7 @@
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include <avr/interrupt.h>
 #include <avr/io.h>
 
@@ -94,11 +98,56 @@ ISR(USART_UDRE_vect) {
     }
 }
 
-ISR(TIMER1_COMPA_vect) {
+ISR(TIMER0_COMP_vect) {
     counter_ms++;
 }
 
-void telnetd_init();
+static uint8_t cmd_parse(char *buffer, char **argv, const uint8_t argv_capacity) {
+    uint8_t argc = 0;
+
+    while(*buffer && (argc < argv_capacity)) {
+        while(isspace((unsigned char)*buffer)) {
+            buffer++;
+        }
+
+        if(*buffer == '\0') {
+            break;
+        }
+
+        argv[argc] = buffer;
+        argc++;
+
+        while(*buffer && !isspace((unsigned char)*buffer)) {
+            buffer++;
+        }
+
+        if(*buffer) {
+            *buffer = '\0';
+            buffer++;
+        }
+    }
+
+    return argc;
+}
+
+void app_call() {
+    if(uip_newdata()) {
+        const uint16_t data_len = uip_datalen();
+        char *data = uip_appdata;
+        data[data_len] = '\0';
+
+        char *argv[8];
+        const uint8_t argc = cmd_parse(data, argv, 8);
+
+        if((strcmp(argv[0], "pwm") == 0) && (argc == 2)) {
+            const int16_t value = strtol(argv[1], NULL, 10);
+
+            if((value >= 0) && (value <= 100)) {
+                OCR1A = 2000 + (20 * value);
+            }
+        }
+    }
+}
 
 int main() {
     fifo_init(&fifo_tx);
@@ -110,11 +159,15 @@ int main() {
     UCSRC = (1 << URSEL) | (1 << UCSZ1) | (1 << UCSZ0);
     UCSRB = (1 << RXEN) | (1 << TXEN) | (1 << RXCIE);
 
-    TCCR1A = 0;
-    TCCR1B = (1 << WGM12);
-    OCR1A = 249;
-    TIMSK |= (1 << OCIE1A);
-    TCCR1B |= (1 << CS11) | (1 << CS10);
+    TCCR0 = (1 << WGM01) | (1 << CS01) | (1 << CS00);
+    OCR0 = 249;
+    TIMSK |= (1 << OCIE0);
+
+    DDRD |= (1 << PD5);
+    TCCR1A = (1 << COM1A1) | (1 << WGM11);
+    TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11);
+    ICR1 = 39999;
+    OCR1A = 2000;
 
     slipdev_init();
     uip_init();
@@ -130,7 +183,7 @@ int main() {
     struct timer timer_periodic;
     timer_set(&timer_periodic, 10);
 
-    telnetd_init();
+    uip_listen(HTONS(23));
 
     sei();
 

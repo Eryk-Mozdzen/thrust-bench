@@ -4,11 +4,6 @@
 #include <stdint.h>
 #include <string.h>
 
-typedef uint8_t u8_t;
-typedef uint16_t u16_t;
-typedef uint16_t uip_stats_t;
-// typedef void *uip_tcp_appstate_t;
-
 #define UIP_CONF_MAX_CONNECTIONS 3
 #define UIP_CONF_MAX_LISTENPORTS 3
 #define UIP_CONF_BUFFER_SIZE     400
@@ -19,13 +14,15 @@ typedef uint16_t uip_stats_t;
 #define UIP_CONF_STATISTICS      0
 #define UIP_CONF_LLH_LEN         0
 
-#define TELNETD_CONF_LINELEN  64
-#define TELNETD_CONF_NUMLINES 3
-
 #define printf(format, ...) ;
 #define tcpip_output()      ;
-// #define UIP_APPCALL()  (void)0
+#define UIP_APPCALL         app_call
 
-#include "telnetd.h"
+typedef uint8_t u8_t;
+typedef uint16_t u16_t;
+typedef uint16_t uip_stats_t;
+typedef void *uip_tcp_appstate_t;
+
+void app_call();
 
 #endif

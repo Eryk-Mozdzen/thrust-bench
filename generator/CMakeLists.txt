@@ -11,10 +11,6 @@ set(TARGET_DUMP ${CMAKE_PROJECT_NAME}.dump)
 add_executable(${TARGET_ELF}
 	"src/main.c"
 
-    "uip/apps/telnetd/shell.c"
-    "uip/apps/telnetd/telnetd.c"
-
-    "uip/lib/memb.c"
     "uip/uip/psock.c"
     "uip/uip/timer.c"
     "uip/uip/uip_arp.c"
@@ -29,9 +25,7 @@ add_executable(${TARGET_ELF}
 
 target_include_directories(${TARGET_ELF} PRIVATE
 	"include"
-    "uip/lib"
     "uip/uip"
-    "uip/apps/telnetd"
     "uip-slip"
 )
 
