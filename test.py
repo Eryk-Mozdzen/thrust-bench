@@ -59,7 +59,7 @@ class Bus:
             await q.put(message)
 
 
-class Experiment:
+class ExperimentFocus:
     def __init__(self):
         self.value = 0.02
         self.value_max = 0.2
@@ -86,6 +86,56 @@ class Experiment:
                 )
             )
             await asyncio.sleep(self.step_duration)
+
+
+class ExperimentESC:
+    def __init__(self):
+        self.value = 0.01
+        self.value_max = 1
+        self.step_value = 0.01
+        self.step_duration = 2
+
+    async def run(self, queue, focus):
+        await focus.set(self.value)
+        await asyncio.sleep(3)
+
+        while True:
+            if np.abs(self.value) > np.abs(self.value_max):
+                return
+
+            self.value += self.step_value
+
+            await focus.set(self.value)
+            await queue.put(
+                (
+                    datetime.datetime.now(datetime.UTC),
+                    {
+                        "setpoint_pwm": self.value,
+                    },
+                )
+            )
+            await asyncio.sleep(self.step_duration)
+
+
+class ESC:
+    def __init__(self, ip):
+        self.ip = ip
+
+    async def __aenter__(self):
+        self.reader, self.writer = await asyncio.open_connection(self.ip, 23)
+        await self.set(0)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.set(0)
+        self.writer.close()
+        await self.writer.wait_closed()
+
+    async def set(self, thrust):
+        percentage = max(0, min(int(thrust * 100), 100))
+        message = f"pwm {percentage}\r\n"
+        self.writer.write(message.encode("utf-8"))
+        await self.writer.drain()
 
 
 class Focus:
@@ -331,22 +381,32 @@ class Recorder:
 
 async def main():
     async with (
-        Focus("192.168.8.1") as focus,
+        # Focus("192.168.8.1") as focus,
+        ESC("192.168.9.1") as esc,
         Bench("ws://192.168.7.2:81/data") as bench,
     ):
         bus = Bus()
 
-        experiment = Experiment()
-        plotter1 = Plotter(["true_velocity", "focus_velocity"])
-        plotter2 = Plotter(["setpoint_torque", "true_torque"])
-        recorder = Recorder()
+        # experiment = ExperimentFocus()
+        # plotter1 = Plotter(["true_velocity", "focus_velocity"])
+        # plotter2 = Plotter(["setpoint_torque", "true_torque"])
+        # recorder = Recorder()
+        # tasks = [
+        #     asyncio.create_task(experiment.run(bus, focus)),
+        #     asyncio.create_task(focus.run(bus)),
+        #     asyncio.create_task(bench.run(bus)),
+        #     asyncio.create_task(plotter1.run(bus.subscribe())),
+        #     asyncio.create_task(plotter2.run(bus.subscribe())),
+        #     asyncio.create_task(recorder.run(bus.subscribe())),
+        # ]
 
+        experiment = ExperimentESC()
+        plotter = Plotter(["true_torque"])
+        recorder = Recorder()
         tasks = [
-            asyncio.create_task(experiment.run(bus, focus)),
-            asyncio.create_task(focus.run(bus)),
+            asyncio.create_task(experiment.run(bus, esc)),
             asyncio.create_task(bench.run(bus)),
-            asyncio.create_task(plotter1.run(bus.subscribe())),
-            asyncio.create_task(plotter2.run(bus.subscribe())),
+            asyncio.create_task(plotter.run(bus.subscribe())),
             asyncio.create_task(recorder.run(bus.subscribe())),
         ]
 
