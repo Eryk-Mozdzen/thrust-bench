@@ -90,7 +90,7 @@ class ExperimentFocus:
 
 class ExperimentESC:
     def __init__(self):
-        self.value = 0.01
+        self.value = 0.05
         self.value_max = 1
         self.step_value = 0.01
         self.step_duration = 2
@@ -110,7 +110,7 @@ class ExperimentESC:
                 (
                     datetime.datetime.now(datetime.UTC),
                     {
-                        "setpoint_pwm": self.value,
+                        "setpoint_torque": self.value,
                     },
                 )
             )
