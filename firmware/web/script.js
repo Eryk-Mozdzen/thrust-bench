@@ -15,6 +15,10 @@ ws.onmessage = (event) => {
     document.getElementById("temperature").textContent = view.getFloat32(12, true).toFixed(1)
     document.getElementById("voltage").textContent = view.getFloat32(16, true).toFixed(2)
     document.getElementById("current").textContent = view.getFloat32(20, true).toFixed(2)
+
+    document.getElementById("thrust_load").textContent = view.getInt32(24, true)
+    document.getElementById("torque_load1").textContent = view.getInt32(28, true)
+    document.getElementById("torque_load2").textContent = view.getInt32(32, true)
 }
 
 function sendCommand(cmd) {
