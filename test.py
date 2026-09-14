@@ -225,8 +225,8 @@ class Bench:
             while True:
                 message = await self.ws.recv()
 
-                thrust, torque, velocity, temperature, voltage, current = struct.unpack(
-                    "<6f", message
+                thrust, torque, velocity, temperature, voltage, current, _, _, _ = (
+                    struct.unpack("<6f3i", message)
                 )
 
                 await queue.put(

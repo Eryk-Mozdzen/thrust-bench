@@ -114,10 +114,14 @@ rotor_field = np.pi * (rotor_radius**2)
 # TODO: measure pressure and humidity
 dry_air_gas_constant = 287.05
 air_pressure = 101325  # sea level
-air_temperature = df["true_temperature"].mean() + 273.15
-air_density = air_pressure / (dry_air_gas_constant * air_temperature)
+[air_temperature], _, _ = curve_fit(
+    lambda x, temperature: temperature,
+    df["timestamp"],
+    df["true_temperature"],
+)
+air_density = air_pressure / (dry_air_gas_constant * (air_temperature + 273.15))
 
-print(f"     air temperature {df["true_temperature"].mean():6.3f} deg C")
+print(f"     air temperature {air_temperature:6.3f} deg C")
 print(f"         air density {air_density:6.3f} km/m^3")
 
 df["power_electrical"] = df["true_voltage"].abs() * df["true_current"].abs()

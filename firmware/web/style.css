@@ -48,6 +48,11 @@ h1 {
     font-weight: 600;
 }
 
+.value_raw {
+    font-size: 1vw;
+    color: #888;
+}
+
 .unit {
     font-size: 1.5vw;
     margin-top: 6px;

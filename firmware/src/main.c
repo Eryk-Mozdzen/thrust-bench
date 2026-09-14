@@ -516,6 +516,16 @@ void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
     }
 }
 
+typedef struct {
+    float thrust;
+    float torque;
+    float velocity;
+    float temperature;
+    float voltage;
+    float current;
+    int32_t load[3];
+} frame_t;
+
 int main() {
     HAL_Init();
     SystemClock_Config();
@@ -557,12 +567,7 @@ int main() {
     uint8_t send_buffer[1024];
     uint8_t recv_buffer[1024];
 
-    float thrust = 0;
-    float torque = 0;
-    float velocity = 0;
-    float temperature = 0;
-    float voltage = 0;
-    float current = 0;
+    frame_t frame = {0};
 
     int32_t load_raw[3] = {0};
     int32_t load_offset[3] = {0};
@@ -596,10 +601,6 @@ int main() {
                 if((timestamp - prev1) >= 100) {
                     prev1 = timestamp;
 
-                    const float frame[6] = {
-                        thrust, torque, velocity, temperature, voltage, current,
-                    };
-
                     for(struct websocket_client *client = ws_server->clients; client != NULL;
                         client = client->next) {
                         websocket_send(client, &frame, sizeof(frame));
@@ -620,28 +621,36 @@ int main() {
             } break;
         }
 
-        tacho_read(&tacho, &velocity);
+        tacho_read(&tacho, &frame.velocity);
 
         if(hx711_read(&hx711, load_raw)) {
-            const int32_t load[3] = {
-                load_raw[0] - load_offset[0],
-                load_raw[1] - load_offset[1],
-                load_raw[2] - load_offset[2],
-            };
+            frame.load[0] = load_raw[0] - load_offset[0];
+            frame.load[1] = load_raw[1] - load_offset[1];
+            frame.load[2] = load_raw[2] - load_offset[2];
 
             const float g = 9.8067f;
             const float arm = 0.270f;
-            const float k1 = 0.265f / -105000.f;
-            const float k2 = 0.2115f / -1644876.f;
+            const float k = 0.265f / -105000.f;
 
-            thrust = load[0] * k1 * g;
-            torque = 0.5f * (load[1] + load[2]) * k2 * arm * g;
+            const float mass = 0.212f;
+            const float t1 = -mass * arm * g;
+            const float l11 = 1368339.f;
+            const float l21 = 1900411.f;
+            const float t2 = +mass * arm * g;
+            const float l12 = -1795504.f;
+            const float l22 = -1414293.f;
+
+            const float k1 = ((t1 * l22) - (t2 * l21)) / ((l11 * l22) - (l12 * l21));
+            const float k2 = (-(t1 * l12) + (t2 * l11)) / ((l11 * l22) - (l12 * l21));
+
+            frame.thrust = frame.load[0] * k * g;
+            frame.torque = (k1 * frame.load[1]) + (k2 * frame.load[2]);
         }
 
         if((timestamp - prev2) >= 50) {
             prev2 = timestamp;
-            ina226_read(&ina226, &voltage, &current);
-            ds18b20_read(&ds18b20, &temperature);
+            ina226_read(&ina226, &frame.voltage, &frame.current);
+            ds18b20_read(&ds18b20, &frame.temperature);
         }
 
         const uint32_t recv_len = fifo_read(&context.fifo_rx, recv_buffer, sizeof(recv_buffer));
