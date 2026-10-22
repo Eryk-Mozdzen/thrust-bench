@@ -205,7 +205,6 @@ plt.ylim([0, 100])
 plt.grid()
 plt.legend()
 
-model1, _, _ = curve_fit(lambda x, b: x + b, df["setpoint_torque"], df["true_torque"])
 model2, _, model2_keep = curve_fit(
     lambda x, a, b: (a * x) + b, df["setpoint_torque"], df["true_torque"]
 )
@@ -213,7 +212,7 @@ torque = np.linspace(df["setpoint_torque"].min(), df["setpoint_torque"].max(), 1
 print(f"torque setpoint slope {model2[0]:.3f}")
 
 plt.figure()
-plt.plot(torque, torque + model1[0], label="model y=x+b", c="red", linestyle="--")
+plt.plot(torque, torque, label="model y=x+b", c="red", linestyle="--")
 plt.plot(torque, (model2[0] * torque) + model2[1], label="model y=ax+b", c="red")
 plt.scatter(
     df["setpoint_torque"].iloc[model2_keep],
